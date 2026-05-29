@@ -12,6 +12,8 @@ GitHub: `maximhq/bifrost`
 
 ## Repository Layout
 
+Gateway-wide setup/configuration that is not source code lives outside this source tree at the relative directory `../llm-gateway/bifrost-gateway/`. From this repository root, treat the source tree as `.` and the gateway setup tree as `../llm-gateway/bifrost-gateway/`. The setup tree has its own `AGENTS.md` that points back to this source root with the relative path `../../bifrost`.
+
 ```
 bifrost/
 ├── core/                           # Go core library — the engine

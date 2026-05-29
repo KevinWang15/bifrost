@@ -14,6 +14,14 @@ VERSION ?= dev-build
 LOCAL ?=
 DEBUG ?=
 COMPAT ?=
+IMAGE_REGISTRY ?= harbor.jqdomain.com/hpc-llm-tools
+BIFROST_VERSION_FILE := transports/version
+BIFROST_INTERNAL_VERSION_FILE := transports/internal_version
+BIFROST_VERSION := $(shell sed -n '1p' $(BIFROST_VERSION_FILE) 2>/dev/null)
+BIFROST_INTERNAL_VERSION := $(shell sed -n '1p' $(BIFROST_INTERNAL_VERSION_FILE) 2>/dev/null)
+BIFROST_IMAGE_REPOSITORY ?= $(IMAGE_REGISTRY)/bifrost
+BIFROST_PUSH_VERSION := v$(BIFROST_VERSION)-$(BIFROST_INTERNAL_VERSION)
+BIFROST_PUSH_IMAGE := $(BIFROST_IMAGE_REPOSITORY):$(BIFROST_PUSH_VERSION)
 
 # Colors for output
 RED=\033[0;31m
@@ -68,7 +76,7 @@ define EXPOSE_ENV
 	fi
 endef
 
-.PHONY: all help dev dev-pulse build-ui build build-cli run run-cli install-air install-pulse clean test test-cli install-ui setup-workspace work-init work-clean docs docker-image docker-run cleanup-enterprise mod-tidy test-integrations-py test-integrations-ts install-playwright run-e2e run-e2e-ui run-e2e-headed run-e2e-api format ui install-newman run-provider-harness-test smoke-provider-harness-test run-cli-harness-test cli-harness-report test-harness-runner-lib test-semantic-cache test-semantic-cache-complete _test-semantic-cache-complete-inner helm-index install-microsocks socks5-proxy install-tinyproxy http-proxy
+.PHONY: all help dev dev-pulse build-ui build build-cli run run-cli install-air install-pulse clean test test-cli install-ui setup-workspace work-init work-clean docs docker-image docker-run cleanup-enterprise mod-tidy test-integrations-py test-integrations-ts install-playwright run-e2e run-e2e-ui run-e2e-headed run-e2e-api format ui install-newman run-provider-harness-test smoke-provider-harness-test run-cli-harness-test cli-harness-report test-harness-runner-lib test-semantic-cache test-semantic-cache-complete _test-semantic-cache-complete-inner helm-index install-microsocks socks5-proxy install-tinyproxy http-proxy push-bifrost
 
 all: help
 
@@ -91,6 +99,8 @@ help: ## Show this help message
 	@$(ECHO) "  LOG_LEVEL         Logger level: debug|info|warn|error (default: info)"
 	@$(ECHO) "  APP_DIR           App data directory inside container (default: /app/data)"
 	@$(ECHO) "  LOCAL             Use local go.work for builds (e.g., make build LOCAL=1)"
+	@$(ECHO) "  VERSION           Version for local binary builds (default: dev-build)"
+	@$(ECHO) "  IMAGE_REGISTRY    Registry for push-bifrost (default: harbor.jqdomain.com/hpc-llm-tools)"
 	@$(ECHO) "  DEBUG             Enable delve debugger on port 2345 (e.g., make dev DEBUG=1, make test-core DEBUG=1, make test-governance DEBUG=1)"
 	@$(ECHO) ""
 	@$(ECHO) "$(YELLOW)Test Configuration:$(NC)"
@@ -474,6 +484,16 @@ docker-image: build-ui ## Build Docker image (LOCAL=1 to use Dockerfile.local)
 	$(eval DOCKERFILE=$(if $(LOCAL),transports/Dockerfile.local,transports/Dockerfile))
 	@docker build -f $(DOCKERFILE) -t bifrost -t bifrost:$(GIT_SHA) -t bifrost:latest .
 	@$(ECHO) "$(GREEN)Docker image built: bifrost, bifrost:$(GIT_SHA), bifrost:latest (using $(DOCKERFILE))$(NC)"
+
+push-bifrost: ## Build and push internal Bifrost image using transports/version and transports/internal_version
+	@test -s "$(BIFROST_VERSION_FILE)" || { $(ECHO) "$(RED)Missing or empty $(BIFROST_VERSION_FILE)$(NC)" >&2; exit 1; }
+	@test -s "$(BIFROST_INTERNAL_VERSION_FILE)" || { $(ECHO) "$(RED)Missing or empty $(BIFROST_INTERNAL_VERSION_FILE)$(NC)" >&2; exit 1; }
+	@case "$(BIFROST_VERSION)" in *[!0-9.]*|"") $(ECHO) "$(RED)Invalid Bifrost version: $(BIFROST_VERSION)$(NC)" >&2; exit 1 ;; esac
+	@case "$(BIFROST_INTERNAL_VERSION)" in *[!A-Za-z0-9._-]*|"") $(ECHO) "$(RED)Invalid Bifrost internal version: $(BIFROST_INTERNAL_VERSION)$(NC)" >&2; exit 1 ;; esac
+	@$(ECHO) "$(GREEN)Building internal Bifrost image: $(BIFROST_PUSH_IMAGE)$(NC)"
+	docker build -f transports/Dockerfile.local --build-arg VERSION="$(BIFROST_VERSION)" -t $(BIFROST_PUSH_IMAGE) .
+	docker push $(BIFROST_PUSH_IMAGE)
+	@$(ECHO) "$(GREEN)Pushed internal Bifrost image: $(BIFROST_PUSH_IMAGE)$(NC)"
 
 docker-run: ## Run Docker container (Usage: make docker-run [CONFIG=path/to/config.json or path/to/dir/])
 	@$(ECHO) "$(GREEN)Running Docker container...$(NC)"

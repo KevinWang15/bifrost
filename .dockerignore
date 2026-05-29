@@ -67,3 +67,7 @@ temp/
 # Go workspaces (local only)
 go.work
 go.work.sum
+# Nested local workspace artifacts
+**/node_modules/
+**/out/
+**/tmp/

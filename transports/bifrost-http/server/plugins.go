@@ -9,6 +9,7 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/plugins/compat"
 	"github.com/maximhq/bifrost/plugins/governance"
+	"github.com/maximhq/bifrost/plugins/logencryption"
 	"github.com/maximhq/bifrost/plugins/logging"
 	"github.com/maximhq/bifrost/plugins/maxim"
 	"github.com/maximhq/bifrost/plugins/modelcatalogresolver"
@@ -86,7 +87,8 @@ func loadBuiltinPlugin(ctx context.Context, name string, pluginConfig any, bifro
 			loggingConfig.ObjectStorageEnabled = bifrostConfig.LogsStoreConfig != nil &&
 				bifrostConfig.LogsStoreConfig.ObjectStorage != nil
 		}
-		return logging.Init(ctx, loggingConfig, logger, bifrostConfig.LogsStore,
+		logsStore := logencryption.WrapLogStoreFromEnv(bifrostConfig.LogsStore, logger)
+		return logging.Init(ctx, loggingConfig, logger, logsStore,
 			bifrostConfig.ConfigStore, bifrostConfig.ModelCatalog, bifrostConfig.MCPCatalog)
 
 	case governance.PluginName:

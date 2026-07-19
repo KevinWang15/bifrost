@@ -1,0 +1,34 @@
+{
+  "carrier": [
+    {
+      "content": "{\"__jq_log_encryption_v1\":true,\"version\":1,\"status\":\"encrypted\",\"field\":\"bundle\",\"content_alg\":\"AES-256-GCM\",\"content_nonce\":\"IcJhNUlArxdKm9gW\",\"content_ciphertext\":\"/SpT4/bZvdy4QK2n/Z/zN79r+xYxfCrj8UBBGBOY0ZWDS30bVeQTaKh/0jwCYFiG7sJdRjVAIINLTqJz3stjILqtm56twe3K19N9vyNHtnQxL9mhTADPCjSb04Mujja3z2iaaQkH8uV1O8T506C7OO5hKQF1+VK5WMuM9T0OqfhJuRP+7u0NyT/WgLbIkNQNQqRyJA==\",\"aad\":{\"log_id\":\"req_vector\",\"field\":\"bundle\",\"team_id\":\"team_v\",\"user_id\":\"vectoruser\"},\"recipients\":[{\"type\":\"owner\",\"kid\":\"user-vector-v1\",\"alg\":\"RSA-OAEP-SHA256\",\"wrapped_dek\":\"egHtGS1l9NOYgwlnndH6fTPrfqxluYR6zWwPVBXDrsSWxWr5mO1nY4JOiYg63MSitnrSa2ZfoR7mSyevYsc9uhAr5JHHqWcx1LAPfj4ueupJhmLJukTFXoLfGqz6uhL1Q/d8F4eEv3Ph/DE0xI4+IOQR06Qm73BmQJuAow/TmokD99Je2+QZZIsIhKdICVue9djc18k+dCuyAclsRi7WVHOG7xdTFiFPH7g+yWxBweUP7apruVN55TUMf1olaS3sWceh8uG4EELpAwXPeWGKDJIMmuFcn/e/D4aTw7MSygUvCWjIQ7F1coqFNL7IK3VI8FEEC3P824n8wK5T43xJDQ==\"}]}",
+      "role": "user"
+    }
+  ],
+  "envelope": {
+    "__jq_log_encryption_v1": true,
+    "version": 1,
+    "status": "encrypted",
+    "field": "bundle",
+    "content_alg": "AES-256-GCM",
+    "content_nonce": "IcJhNUlArxdKm9gW",
+    "content_ciphertext": "/SpT4/bZvdy4QK2n/Z/zN79r+xYxfCrj8UBBGBOY0ZWDS30bVeQTaKh/0jwCYFiG7sJdRjVAIINLTqJz3stjILqtm56twe3K19N9vyNHtnQxL9mhTADPCjSb04Mujja3z2iaaQkH8uV1O8T506C7OO5hKQF1+VK5WMuM9T0OqfhJuRP+7u0NyT/WgLbIkNQNQqRyJA==",
+    "aad": {
+      "log_id": "req_vector",
+      "field": "bundle",
+      "team_id": "team_v",
+      "user_id": "vectoruser"
+    },
+    "recipients": [
+      {
+        "type": "owner",
+        "kid": "user-vector-v1",
+        "alg": "RSA-OAEP-SHA256",
+        "wrapped_dek": "egHtGS1l9NOYgwlnndH6fTPrfqxluYR6zWwPVBXDrsSWxWr5mO1nY4JOiYg63MSitnrSa2ZfoR7mSyevYsc9uhAr5JHHqWcx1LAPfj4ueupJhmLJukTFXoLfGqz6uhL1Q/d8F4eEv3Ph/DE0xI4+IOQR06Qm73BmQJuAow/TmokD99Je2+QZZIsIhKdICVue9djc18k+dCuyAclsRi7WVHOG7xdTFiFPH7g+yWxBweUP7apruVN55TUMf1olaS3sWceh8uG4EELpAwXPeWGKDJIMmuFcn/e/D4aTw7MSygUvCWjIQ7F1coqFNL7IK3VI8FEEC3P824n8wK5T43xJDQ=="
+      }
+    ]
+  },
+  "expected_plaintext": "{\"input_history\":[{\"role\":\"user\",\"content\":\"cross-language vector\"}],\"output_message\":{\"role\":\"assistant\",\"content\":\"vector reply\"}}",
+  "private_key_pkcs8": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDB3erONmtKiJne\nwKlJHGEQ0Dvt+Ldwcht8QmaVy18xJgJ3QLhmM4MtLJOStH3lw9oGKqP0C8adZX2b\n0zN2dJ+LsiLdPRgoc+RsMzImbeCQLqVg2dPZcEmEDpHhUx+URrsYZGDnJMTNNB5I\n5TlhH/BlfRS9uCkRtdyFJPX/TfneBROZlMLLRvQPjfY19CxZseM7pzelaMfYkOYp\nR0+9+71k3GgoHBMRvDQ93j7HAE62sBBbP2H2hfmuhGCyZdR0EeH6tFzkofpigkro\nzEUAQu9OSQbJGiBpkEBLTBxpboCB21c7QENPu4xOMUPUiDV4ySLSIX5GUg6Sh6is\nlWT0bIk7AgMBAAECggEAT1G6xlBhqYcmXYs6OB2SYUyxmHYQp8MoF7kbO+KPug4x\nKBWk3LvqycrZPkb209FEHQ3JMwq2YqOptt28ypSAyqlBtn9OqQ5xwQtZU3vVS2iq\nZWv6T5avnYZQjX5zBznBRwOa2jejBcpzMaQHzANDWmLI366/ru1Xomoy9Bg1SW7X\n+B58Q/K5ZL5XfILAKjGByrEnb9qG1de3uQfcgG71LwUjdINERw1VO8Qqz8pNBtFD\nW5AyADhfXxZAihSAsEmBfT30u5clNpOSIjHUfie26KDnCSNWDdYoMyVU2dpCevVm\n7vB3bwmtGdR0kt5ySpSA53GwSc3NfFzsMaPyjDJAwQKBgQDi0FgYXw89qTrjblbJ\n1bHRVEB9+a7I9m485QIOlO/4lXfwwSyRW9dq8yIsVUG6RksiOVKbacru9F+21TAy\nKgmsC36OmMKU2p2LZ3dYYOrOVgeFRaZ1tTHJSn2B/tqjqKgCQGIZc+DeUMs2jdp4\nuRkQ166a8Y8eSFrajNlSATdvkQKBgQDa0D2Fc53pncIk1cL00+n1abs3m8hxj7fe\nqrdszrvwNk8JsDuDrJkwPS7rgtLLCeRnR3zxeF9Q2Oh2Tkb2468Fu5V9F39hu9K3\nUN7HsZ2fZCRBn3W8mqCqR0702w190pNqoT50Glvo8HTxFHgva6oUWLZyaTrb4ErH\nObiPEBveCwKBgHueQBVwYfcicBUawzSYQqUrfUbruaaQIT8RNdDKvgvHMyrFrku/\nOaZxw1NUWFF1FGgfw/UucMtR54TXpsAAh2r8jMqdWZgVmr4q8zH5CKDS5KBveK04\nx1zFO6iJRZLjTkaD3rOuo4WnlUozgDpB7/ZtBx4tv+oqV1I8aAm43gTxAoGARClA\nMNUOKNrSwmSwQVHN/Hu+LRli/DUXws4NK2DO3IoeXtc+Ast+QK+ecRCkl0jylFWJ\njzK/BlE7QLcrlfbg63k+nOP38zrt7drMOwqSHje0r5h7tY+5YrGp385oynwRHdMy\nwDoBzXMyCnMk6Sixp3rnAobTJfEdeif53N7Yv3cCgYBdjYiQSTyqImB1ZLo05MNn\nubSaVaEEoroeZ4mutxeYlbqJ+xZ4JUO00JDh8pq/ecN5zlSTxfj9J1ZE+fjoLD1/\n6wXNCs7LIy1BoIbk9cDaxiepTct9f+gHod7JVFaZLiq4vrcB0JkFYcvsFI0pnxr+\nYw1n7BPiELrLaxmkI64Xfw==\n-----END PRIVATE KEY-----\n",
+  "recipient_kid": "user-vector-v1"
+}

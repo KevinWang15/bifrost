@@ -21,6 +21,20 @@ function isSafeHttpUrl(value: string) {
 	}
 }
 
+const ENCRYPTED_LOG_MARKER = "__jq_log_encryption_v1";
+
+function encryptedContentLabel(content: string): string | null {
+	try {
+		const parsed = JSON.parse(content);
+		if (parsed?.[ENCRYPTED_LOG_MARKER] === true) {
+			return parsed.status === "content_not_recorded" ? "Content not recorded" : "Encrypted log content";
+		}
+	} catch {
+		// Plain text content.
+	}
+	return null;
+}
+
 function formatFileDataSize(fileData?: string) {
 	if (!fileData) return undefined;
 	const padding = fileData.endsWith("==") ? 2 : fileData.endsWith("=") ? 1 : 0;
@@ -230,7 +244,11 @@ export default function LogChatMessageView({ message, audioFormat }: LogChatMess
 				<>
 					{typeof message.content === "string" ? (
 						<>
-							{isJson(message.content) ? (
+							{encryptedContentLabel(message.content) ? (
+								<div className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 text-xs">
+									{encryptedContentLabel(message.content)}
+								</div>
+							) : isJson(message.content) ? (
 								<CollapsibleBox
 									title="Content"
 									onCopy={() => JSON.stringify(cleanJson(message.content as string), null, 2)}

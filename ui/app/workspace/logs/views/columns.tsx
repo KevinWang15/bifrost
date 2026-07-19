@@ -97,12 +97,26 @@ function getAssistantToolCallSummary(log?: LogEntry): string {
 		.join("\n");
 }
 
+const ENCRYPTED_LOG_MARKER = "__jq_log_encryption_v1";
+
+function encryptedContentLabel(content: string): string | null {
+	try {
+		const parsed = JSON.parse(content);
+		if (parsed?.[ENCRYPTED_LOG_MARKER] === true) {
+			return parsed.status === "content_not_recorded" ? "Content not recorded" : "Encrypted log content";
+		}
+	} catch {
+		// Plain text content.
+	}
+	return null;
+}
+
 function getMessageFromContent(content?: ChatMessageContent): string {
 	if (content == undefined) {
 		return "";
 	}
 	if (typeof content === "string") {
-		return content;
+		return encryptedContentLabel(content) ?? content;
 	}
 	let lastTextContentBlock = "";
 	for (const block of content) {

@@ -28,6 +28,13 @@
   ENV CGO_ENABLED=1 GOOS=linux
 
   COPY transports/go.mod transports/go.sum ./
+
+  # Internal fork: the logencryption plugin is built from source (not a published
+  # module). transports/go.mod has `replace .../plugins/logencryption => ../plugins/logencryption`,
+  # which resolves to /plugins/logencryption relative to this /app WORKDIR, so the
+  # source must be present before module download / build.
+  COPY plugins/logencryption /plugins/logencryption
+
   RUN ls
   RUN cat go.mod
   RUN go mod download

@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/codeEditor";
 import { ChatMessage, ContentBlock } from "@/lib/types/logs";
 import { cn } from "@/lib/utils";
+import { encryptedContentLabel } from "@/lib/utils/logEncryption";
 import { cleanJson, isJson } from "@/lib/utils/validation";
 import { Download } from "lucide-react";
 import AudioPlayer from "./audioPlayer";
@@ -19,20 +20,6 @@ function isSafeHttpUrl(value: string) {
 	} catch {
 		return false;
 	}
-}
-
-const ENCRYPTED_LOG_MARKER = "__jq_log_encryption_v1";
-
-function encryptedContentLabel(content: string): string | null {
-	try {
-		const parsed = JSON.parse(content);
-		if (parsed?.[ENCRYPTED_LOG_MARKER] === true) {
-			return parsed.status === "content_not_recorded" ? "Content not recorded" : "Encrypted log content";
-		}
-	} catch {
-		// Plain text content.
-	}
-	return null;
 }
 
 function formatFileDataSize(fileData?: string) {

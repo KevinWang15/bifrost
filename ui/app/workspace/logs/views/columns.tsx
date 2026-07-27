@@ -17,6 +17,7 @@ import {
 } from "@/lib/constants/logs";
 import { ChatMessageContent, DisplayLogEntry, LLMUsage, LogEntry, ResponsesMessageContentBlock } from "@/lib/types/logs";
 import { cn } from "@/lib/utils";
+import { encryptedContentLabel } from "@/lib/utils/logEncryption";
 import { formatCompactNumber } from "@/lib/utils/numbers";
 import { ColumnDef } from "@tanstack/react-table";
 import { format, formatDistanceToNow } from "date-fns";
@@ -95,20 +96,6 @@ function getAssistantToolCallSummary(log?: LogEntry): string {
 		})
 		.filter(Boolean)
 		.join("\n");
-}
-
-const ENCRYPTED_LOG_MARKER = "__jq_log_encryption_v1";
-
-function encryptedContentLabel(content: string): string | null {
-	try {
-		const parsed = JSON.parse(content);
-		if (parsed?.[ENCRYPTED_LOG_MARKER] === true) {
-			return parsed.status === "content_not_recorded" ? "Content not recorded" : "Encrypted log content";
-		}
-	} catch {
-		// Plain text content.
-	}
-	return null;
 }
 
 function getMessageFromContent(content?: ChatMessageContent): string {

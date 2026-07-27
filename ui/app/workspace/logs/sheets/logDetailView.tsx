@@ -43,6 +43,7 @@ import { BatchRequestCounts, ContentBlock, LogEntry, OverheadBucket, ResponsesMe
 import { useGetUserAgentMappingsQuery } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { downloadAsJson } from "@/lib/utils/browser-download";
+import { encryptedContentLabel } from "@/lib/utils/logEncryption";
 import { formatCompactNumber } from "@/lib/utils/numbers";
 import { applyRedactionMapping, applyRedactionMappingToValue, hasRedactionMappingEntries } from "@/lib/utils/redaction";
 import { extractResponsesItemPayload, summarizeResponsesToolCall } from "@/lib/utils/responsesItems";
@@ -893,6 +894,14 @@ function EncryptedReveal({ text, label }: { text: string; label: string }) {
 			{open ? <pre className="font-mono text-[12.5px] leading-[1.6] break-all whitespace-pre-wrap">{text}</pre> : null}
 		</div>
 	);
+}
+
+// EncryptedBadge renders a compact placeholder for encrypted-log content. The
+// ciphertext itself is never rendered: it cannot be decrypted client-side and a
+// verbatim, single-line base64 blob in a `break-all` <pre> both wastes space
+// and janks the panel. Callers gate on encryptedContentLabel() before use.
+function EncryptedBadge({ label }: { label: string }) {
+	return <div className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 text-xs">{label}</div>;
 }
 
 function CollapsibleCode({ text, preview = 3, lang, mono = true }: { text: string; preview?: number; lang?: string; mono?: boolean }) {
@@ -2787,7 +2796,9 @@ export function LogDetailView({
 										rows.push(
 											<MessageRow key={index} role={role} meta={meta} last={isOverallLast}>
 												{text ? (
-													usePlainText && isJson(text) ? (
+													encryptedContentLabel(text) ? (
+														<EncryptedBadge label={encryptedContentLabel(text)!} />
+													) : usePlainText && isJson(text) ? (
 														<CodeEditor
 															wrap
 															code={(() => {
@@ -2893,7 +2904,9 @@ export function LogDetailView({
 																)}
 															</div>
 														) : text ? (
-															isJson(text) ? (
+															encryptedContentLabel(text) ? (
+																<EncryptedBadge label={encryptedContentLabel(text)!} />
+															) : isJson(text) ? (
 																<CodeEditor
 																	wrap
 																	code={(() => {
@@ -3040,7 +3053,9 @@ export function LogDetailView({
 													<div className="text-muted-foreground text-[12px] italic">No reasoning content available</div>
 												)
 											) : text ? (
-												usePlainText ? (
+												encryptedContentLabel(text) ? (
+													<EncryptedBadge label={encryptedContentLabel(text)!} />
+												) : usePlainText ? (
 													<CollapsibleCode text={text} preview={3} mono={false} />
 												) : (
 													<CollapsibleCode text={text} preview={3} lang={role === "system" ? "xml" : undefined} />

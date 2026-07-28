@@ -79,8 +79,8 @@ type LogStore interface {
 	// recovered — for example, a missing object or unavailable object storage. Callers
 	// must skip those rather than price them: the
 	// denormalized fallback usage omits the cache breakdown, and pricing it charges
-	// every cached token at the full input rate. Hydrated carries the IDs actually
-	// fetched, which are the only rows worth passing to BulkBackfillBillingPayloads.
+	// every cached token at the full input rate. Hydrated carries fetched IDs whose
+	// storage policy permits passing them to BulkBackfillBillingPayloads.
 	//
 	// Pass at most BillingHydrationChunkSize rows and release them before requesting
 	// more; the whole point is to bound how many payloads are resident at once.

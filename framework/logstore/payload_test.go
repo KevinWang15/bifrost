@@ -47,17 +47,18 @@ func TestExtractPayload_RoundTrip(t *testing.T) {
 		PassthroughRequestBody:  `body-req`,
 		PassthroughResponseBody: `body-resp`,
 		RoutingEngineLogs:       `routing log`,
+		ContentSummary:          "correct UTF-8 summary",
 		Metadata:                &metadata,
 	}
 
 	payload := ExtractPayload(log)
-	// +1 for metadata, +6 for the always-present index fields (provider, model,
-	// status, timestamp, selected_key_id, selected_key_name) added in #6070.
-	assert.Equal(t, len(payloadFields)+1+6, len(payload), "payload map should have all payload fields plus metadata and index fields")
+	// Payload fields, summary, metadata, and six upstream index fields.
+	assert.Equal(t, len(payloadFields)+2+6, len(payload), "payload includes summary, metadata and index fields")
 	assert.Equal(t, `[{"role":"user","content":"hello"}]`, payload["input_history"])
 	assert.Equal(t, `{"role":"assistant","content":"world"}`, payload["output_message"])
 	assert.Equal(t, `{"judge_calls":[{"total_tokens":18}]}`, payload["guardrail_debug"])
 	assert.Equal(t, `routing log`, payload["routing_engine_logs"])
+	assert.Equal(t, "correct UTF-8 summary", payload[payloadContentSummaryKey])
 	assert.Equal(t, metadata, payload["metadata"], "metadata must be written to the snapshot for object consumers")
 
 	// Clear and verify.
@@ -81,6 +82,7 @@ func TestExtractPayload_RoundTrip(t *testing.T) {
 	dbMetadata := `{"cortex-user-id":"user-456"}`
 	log.Metadata = &dbMetadata
 	log.MetadataParsed = nil
+	log.ContentSummary = "corrupted DB summary"
 	err = MergePayloadFromJSON(log, data)
 	require.NoError(t, err)
 	assert.Equal(t, `[{"role":"user","content":"hello"}]`, log.InputHistory)
@@ -90,6 +92,7 @@ func TestExtractPayload_RoundTrip(t *testing.T) {
 	require.NotNil(t, log.Metadata)
 	assert.Equal(t, dbMetadata, *log.Metadata, "merge must not override DB-authoritative metadata with the snapshot")
 	assert.Equal(t, "user-456", log.MetadataParsed["cortex-user-id"])
+	assert.Equal(t, "correct UTF-8 summary", log.ContentSummary, "new object snapshots own their correctly encoded summary")
 }
 
 func TestExtractPayload_NilOrEmptyMetadataOmittedFromSnapshot(t *testing.T) {
@@ -99,6 +102,31 @@ func TestExtractPayload_NilOrEmptyMetadataOmittedFromSnapshot(t *testing.T) {
 	empty := ""
 	payload = ExtractPayload(&Log{ID: "y", Metadata: &empty})
 	assert.NotContains(t, payload, "metadata", "empty Metadata must not appear in snapshot")
+}
+
+func TestMergePayloadFromJSONRestoresSnapshotContentSummary(t *testing.T) {
+	const summaryMarker = "[encrypted:v2]"
+	log := &Log{ContentSummary: "DB value must not win"}
+	data, err := MarshalPayload(map[string]string{
+		"input_history":          `[{"role":"user","content":"encrypted envelope carrier"}]`,
+		payloadContentSummaryKey: summaryMarker,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, MergePayloadFromJSON(log, data))
+	assert.Equal(t, summaryMarker, log.ContentSummary)
+}
+
+func TestMergePayloadFromJSONRebuildsLegacySnapshotContentSummary(t *testing.T) {
+	log := &Log{ContentSummary: "corrupted DB summary"}
+	data, err := MarshalPayload(map[string]string{
+		"input_history": `[{"role":"user","content":"正确的中文摘要"}]`,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, MergePayloadFromJSON(log, data))
+	assert.Contains(t, log.ContentSummary, "正确的中文摘要")
+	assert.NotEqual(t, "corrupted DB summary", log.ContentSummary)
 }
 
 func TestClearPayload_DoesNotTouchIndexFields(t *testing.T) {

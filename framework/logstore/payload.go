@@ -11,6 +11,7 @@ import (
 )
 
 const maxMCPToolInputPreviewRunes = 200
+const payloadContentSummaryKey = "content_summary"
 
 // payloadFields lists the DB column names of large TEXT fields that are
 // offloaded to object storage in hybrid mode. These fields are never needed
@@ -55,6 +56,23 @@ var payloadFields = []string{
 	"routing_engine_logs",
 }
 
+// PayloadStoragePolicy controls how a completed log payload is projected by a
+// HybridLogStore. It is a transient write-time policy: database-only stores
+// ignore it, and it is never persisted or returned by the API.
+type PayloadStoragePolicy uint8
+
+const (
+	// PayloadStorageDefault preserves the upstream hybrid behavior: offload the
+	// full payload while retaining the configured DB fields and list preview.
+	PayloadStorageDefault PayloadStoragePolicy = iota
+	// PayloadStorageObjectOnly makes object storage the sole payload location.
+	// HybridLogStore uploads every payload field, ignores DB-retention
+	// exclusions for the entry, and persists no payload fields or message
+	// preview in the relational row. Scalar metadata and a caller-provided,
+	// non-sensitive ContentSummary marker remain DB-resident.
+	PayloadStorageObjectOnly
+)
+
 // ExtractPayload reads the serialized TEXT payload fields from a Log into a map.
 // The map keys are the DB column names.
 func ExtractPayload(l *Log) map[string]string {
@@ -95,6 +113,13 @@ func ExtractPayload(l *Log) map[string]string {
 	m["passthrough_request_body"] = l.PassthroughRequestBody
 	m["passthrough_response_body"] = l.PassthroughResponseBody
 	m["routing_engine_logs"] = l.RoutingEngineLogs
+	// Keep the write-time summary alongside the full payload. HybridLogStore
+	// replaces this initial value after preparing the lightweight DB row, so
+	// ordinary snapshots carry the same bounded input-only preview as the DB and
+	// object-only callers retain their fixed non-sensitive marker.
+	if l.ContentSummary != "" {
+		m[payloadContentSummaryKey] = l.ContentSummary
+	}
 	// Metadata is written to the snapshot so consumers reading objects
 	// directly see custom attributes, but it is deliberately NOT part of
 	// payloadFields: it must always stay DB-resident as well (filters,
@@ -159,7 +184,7 @@ const BillingHydrationChunkSize = 3
 // BillingHydrationResult reports what one hydration pass actually did, so the caller
 // does not have to infer it from the rows.
 type BillingHydrationResult struct {
-	// Hydrated lists the rows whose pricing inputs were fetched from object storage.
+	// Hydrated lists rows fetched from object storage whose policy permits backfill.
 	// These are the only rows worth persisting via BulkBackfillBillingPayloads: every
 	// other row's inputs already came from the database.
 	Hydrated []string
@@ -393,10 +418,14 @@ func MergePayloadFromJSON(l *Log, data []byte) error {
 	if err := l.DeserializeFields(); err != nil {
 		return err
 	}
-	// Rebuild content summary from freshly deserialized Parsed fields so it
-	// reflects the correct data from object storage, not a potentially
-	// corrupted DB value (e.g. from client/server encoding mismatch).
-	l.ContentSummary = l.BuildContentSummary()
+	// Prefer the summary captured with new object snapshots. Legacy snapshots
+	// do not contain it, so rebuild from the freshly hydrated UTF-8 payload
+	// instead of trusting a potentially corrupted DB value.
+	if summary, ok := m[payloadContentSummaryKey]; ok && summary != "" {
+		l.ContentSummary = summary
+	} else {
+		l.ContentSummary = l.BuildContentSummary()
+	}
 	return nil
 }
 

@@ -7,6 +7,37 @@ import (
 	"github.com/maximhq/bifrost/plugins/logencryption/envelope"
 )
 
+// hasInstalledCarrier recognizes only the exact terminal shape produced by
+// installCarrier. Requiring the object-only policy, summary sentinel, empty
+// sibling content, and a valid v2 envelope prevents caller-supplied envelope
+// text from bypassing encryption while making writer retries idempotent.
+func hasInstalledCarrier(entry *logstore.Log) bool {
+	if entry.PayloadStoragePolicy != logstore.PayloadStorageObjectOnly ||
+		entry.ContentSummary != summarySentinel ||
+		entry.OutputMessage != "" ||
+		entry.OutputMessageParsed != nil ||
+		entry.ResponsesInputHistory != "" ||
+		entry.ResponsesInputHistoryParsed != nil ||
+		entry.ResponsesOutput != "" ||
+		entry.ResponsesOutputParsed != nil {
+		return false
+	}
+
+	messages := entry.InputHistoryParsed
+	if messages == nil && entry.InputHistory != "" {
+		if err := json.Unmarshal([]byte(entry.InputHistory), &messages); err != nil {
+			return false
+		}
+	}
+	if len(messages) != 1 {
+		return false
+	}
+	content := messages[0].Content
+	return content != nil &&
+		content.ContentStr != nil &&
+		envelope.IsEnvelope([]byte(*content.ContentStr))
+}
+
 // marshalBundle assembles the whole-conversation plaintext bundle from whatever
 // content fields are present on the entry. The second return is false when there
 // is nothing to seal. Each field carries the original serialized JSON verbatim so
@@ -102,7 +133,7 @@ func marshalResponsesOutput(entry *logstore.Log) ([]byte, bool) {
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return `{"__jq_log_encryption_v1":true,"version":1,"status":"content_not_recorded","reason":"policy_unavailable"}`
+		return `{"__jq_log_encryption_v2":true,"version":2,"status":"content_not_recorded","reason":"policy_unavailable","content_encoding":"gzip"}`
 	}
 	return string(b)
 }

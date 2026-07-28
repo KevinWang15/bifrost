@@ -16,16 +16,14 @@ import (
 	"github.com/maximhq/bifrost/plugins/logencryption/envelope"
 )
 
-// TestBundleCarrierSurvivesListPathPostgres runs the decisive carrier-survival
-// assertion against a REAL PostgreSQL logstore, closing the gap that the other
-// read-path tests use sqlite. It exercises the real bifrost_safe_jsonb list
-// truncation on Postgres. Gated behind the `pge2e` build tag + PG_E2E_DSN-style
-// env (PGHOST/PGPORT/... below) so it never runs in normal CI.
+// TestBundleCarrierSurvivesDatabaseOnlyListPathPostgres covers the no-S3
+// PostgreSQL mode. It exercises the real bifrost_safe_jsonb list truncation and
+// is gated behind the `pge2e` build tag + PG_E2E_DSN-style env.
 //
 // Run: PGE2E=1 with a live PG at localhost:5432 (user e2e / pass e2e / db logs):
 //
-//	CGO_ENABLED=1 go test -tags pge2e -run TestBundleCarrierSurvivesListPathPostgres -v ./
-func TestBundleCarrierSurvivesListPathPostgres(t *testing.T) {
+//	CGO_ENABLED=1 go test -tags pge2e -run TestBundleCarrierSurvivesDatabaseOnlyListPathPostgres -v ./
+func TestBundleCarrierSurvivesDatabaseOnlyListPathPostgres(t *testing.T) {
 	if os.Getenv("PGE2E") == "" {
 		t.Skip("set PGE2E=1 with a live Postgres to run")
 	}

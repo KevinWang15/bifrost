@@ -433,3 +433,51 @@ func TestBackfillMakesLaterHydrationFetchFree(t *testing.T) {
 	assert.True(t, dbRow.HasObject, "the row must still reference its offloaded payload")
 	assert.Equal(t, 1, objStore.Len(), "the object must still hold the full payload")
 }
+
+// Object-only writes clear even configured DB-resident fields. Recomputing must
+// recover cache usage on every fresh read without making those fields SQL-resident.
+func TestObjectOnlyBillingRecoversUsageWithoutBackfill(t *testing.T) {
+	t.Run("visible", func(t *testing.T) { testObjectOnlyBilling(t, false) })
+	t.Run("hidden", func(t *testing.T) { testObjectOnlyBilling(t, true) })
+}
+
+func testObjectOnlyBilling(t *testing.T, hidden bool) {
+	ctx := context.Background()
+	hybrid, inner, objects := newCountingHybrid(t, []string{"token_usage", "cache_debug"})
+	defer hybrid.Close(ctx)
+	entry := &Log{
+		ID: "object-only-billing", Timestamp: time.Now().UTC(), Provider: "anthropic",
+		Model: "claude-test", Status: "success", Object: "chat.completion",
+		ContentSummary: "policy-marker", PayloadStoragePolicy: PayloadStorageObjectOnly,
+		ContentHidden:    hidden,
+		TokenUsageParsed: billingTestUsage(),
+	}
+	require.NoError(t, entry.SerializeFields())
+	require.NoError(t, hybrid.CreateIfNotExists(ctx, entry))
+	waitForOffload(t, inner, entry.ID)
+	for pass := 1; pass <= 2; pass++ {
+		result, err := hybrid.SearchLogsForBilling(ctx, SearchFilters{}, PaginationOptions{Limit: 10})
+		require.NoError(t, err)
+		require.Len(t, result.Logs, 1)
+		row := &result.Logs[0]
+		require.Empty(t, row.TokenUsage)
+		require.Equal(t, "policy-marker", row.ContentSummary)
+		require.Equal(t, hidden, row.ContentHidden)
+		// Restored by the owning decorator after the database read.
+		row.PayloadStoragePolicy = PayloadStorageObjectOnly
+		hydration, err := hybrid.HydrateBillingChunk(ctx, []*Log{row})
+		require.NoError(t, err)
+		require.Empty(t, hydration.Unpriceable)
+		require.Empty(t, hydration.Hydrated, "object-only rows must not enter the backfill map")
+		require.NotEmpty(t, row.TokenUsage)
+		require.Equal(t, billingTestUsage(), row.TokenUsageParsed)
+		require.Len(t, objects.gets, pass)
+		_, err = hybrid.HydrateBillingChunk(ctx, []*Log{row})
+		require.NoError(t, err)
+		require.Len(t, objects.gets, pass, "same chunk must not fetch twice")
+	}
+	raw, err := inner.FindByID(ctx, entry.ID)
+	require.NoError(t, err)
+	require.Empty(t, raw.TokenUsage)
+	require.Empty(t, raw.CacheDebug)
+}

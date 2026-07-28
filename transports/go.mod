@@ -241,4 +241,7 @@ require (
 	gorm.io/driver/postgres v1.6.0 // indirect
 )
 
-replace github.com/maximhq/bifrost/plugins/logencryption => ../plugins/logencryption
+replace (
+	github.com/maximhq/bifrost/framework => ../framework
+	github.com/maximhq/bifrost/plugins/logencryption => ../plugins/logencryption
+)

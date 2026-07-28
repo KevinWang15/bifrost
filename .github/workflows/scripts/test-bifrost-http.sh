@@ -63,6 +63,10 @@ cd ../../..
 # Validate transport build
 echo "🔨 Validating transport build..."
 cd transports
+# This fork's transport imports the local log-encryption plugin, which in turn
+# uses local framework extensions. Compile once without the workspace so a
+# stale published framework dependency cannot be hidden by go.work.
+GOWORK=off go test -mod=readonly ./bifrost-http/server
 go build ./...
 
 # Run unit tests with coverage

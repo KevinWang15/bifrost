@@ -252,10 +252,23 @@ func prepareDBEntry(dbEntry *Log, excluded map[string]struct{}) {
 	// Hidden entries keep no request/response content in the DB row: no summary,
 	// last-user-message preview, or exclusion-list carve-outs. Pricing metadata is
 	// not content and remains in the log store.
-	if dbEntry.ContentHidden {
+	if dbEntry.ContentHidden && dbEntry.PayloadStoragePolicy != PayloadStorageObjectOnly {
 		ClearPayload(dbEntry)
 		restorePricingMetadata()
 		dbEntry.ContentSummary = ""
+		return
+	}
+
+	if dbEntry.PayloadStoragePolicy == PayloadStorageObjectOnly {
+		// Object-only is an entry-level storage contract, so it overrides the
+		// store-wide exclusion list: all payload fields belong in the object
+		// and none may be retained as a relational preview. Unlike ContentHidden
+		// the payload is still hydrated back on read, so ContentSummary is
+		// deliberately caller-provided here and must be non-sensitive. Retain
+		// that policy marker even if ContentHidden independently blocks serving
+		// reads; billing still needs to recognize the storage contract.
+		ClearPayload(dbEntry)
+		dbEntry.ContentSummary = truncateTag(dbEntry.ContentSummary, maxContentSummaryBytes)
 		return
 	}
 
@@ -305,21 +318,34 @@ func prepareDBEntry(dbEntry *Log, excluded map[string]struct{}) {
 	}
 }
 
-// Create writes a lightweight DB row (with payload fields stripped per
-// excludedPayloadFields) and asynchronously offloads the full payload to
-// object storage. The caller's entry is preserved on DB failure by writing to
-// a shallow copy; on success, only ContentSummary is propagated back so the
-// caller can observe what was persisted.
-// extractUploadPayload returns the payload map to offload for entry. Hidden
-// entries always upload the complete payload: the exclusion list exists to
-// keep fields DB-resident, and hidden rows must not retain content in the DB.
+// extractUploadPayload returns the payload map to offload for entry. Hidden and
+// object-only entries always upload the complete payload: the exclusion list
+// exists to keep fields DB-resident, and those rows retain no content in the DB,
+// so a field must not be omitted from both storage backends.
 func (h *HybridLogStore) extractUploadPayload(entry *Log) map[string]string {
-	if entry.ContentHidden {
+	if entry.ContentHidden || entry.PayloadStoragePolicy == PayloadStorageObjectOnly {
 		return ExtractPayload(entry)
 	}
 	return ExtractPayloadFiltered(entry, h.excludedPayloadFields)
 }
 
+// alignPayloadContentSummary makes the object snapshot carry the same bounded
+// summary as the lightweight DB row. ExtractPayload runs before prepareDBEntry
+// so it initially sees SerializeFields' full input+output summary; retaining
+// that value would duplicate most text payloads in object storage.
+func alignPayloadContentSummary(payload map[string]string, dbEntry *Log) {
+	if dbEntry.ContentSummary == "" {
+		delete(payload, payloadContentSummaryKey)
+		return
+	}
+	payload[payloadContentSummaryKey] = dbEntry.ContentSummary
+}
+
+// Create writes a lightweight DB row (with payload fields stripped per
+// excludedPayloadFields) and asynchronously offloads the full payload to
+// object storage. The caller's entry is preserved on DB failure by writing to
+// a shallow copy; on success, only ContentSummary is propagated back so the
+// caller can observe what was persisted.
 func (h *HybridLogStore) Create(ctx context.Context, entry *Log) error {
 	if err := entry.SerializeFields(); err != nil {
 		return fmt.Errorf("logstore: serialize before extract: %w", err)
@@ -329,6 +355,7 @@ func (h *HybridLogStore) Create(ctx context.Context, entry *Log) error {
 	// Work on a shallow copy so the caller's entry is preserved on DB failure.
 	dbEntry := *entry
 	prepareDBEntry(&dbEntry, h.excludedPayloadFields)
+	alignPayloadContentSummary(payload, &dbEntry)
 	if err := h.inner.Create(ctx, &dbEntry); err != nil {
 		return err
 	}
@@ -349,6 +376,7 @@ func (h *HybridLogStore) CreateIfNotExists(ctx context.Context, entry *Log) erro
 	// Work on a shallow copy so the caller's entry is preserved on DB failure.
 	dbEntry := *entry
 	prepareDBEntry(&dbEntry, h.excludedPayloadFields)
+	alignPayloadContentSummary(payload, &dbEntry)
 	if err := h.inner.CreateIfNotExists(ctx, &dbEntry); err != nil {
 		return err
 	}
@@ -386,6 +414,7 @@ func (h *HybridLogStore) BatchCreateIfNotExists(ctx context.Context, entries []*
 		// Work on a shallow copy so the caller's entries are preserved on DB failure.
 		dbEntry := *entry
 		prepareDBEntry(&dbEntry, h.excludedPayloadFields)
+		alignPayloadContentSummary(payload, &dbEntry)
 		dbEntries = append(dbEntries, &dbEntry)
 		origEntries = append(origEntries, entry)
 		uploads = append(uploads, pendingUpload{
@@ -699,7 +728,11 @@ func (h *HybridLogStore) HydrateBillingChunk(ctx context.Context, logs []*Log) (
 			result.Unpriceable = append(result.Unpriceable, log.ID)
 			continue
 		}
-		result.Hydrated = append(result.Hydrated, log.ID)
+		// Object-only rows may be priced in memory, but none of their payload
+		// fields may be cached back into SQL by the recompute worker.
+		if log.PayloadStoragePolicy != PayloadStorageObjectOnly {
+			result.Hydrated = append(result.Hydrated, log.ID)
+		}
 	}
 	return result, nil
 }
@@ -729,6 +762,11 @@ func billingRowNeedsHydration(l *Log, excluded map[string]struct{}) bool {
 	// fields it did not hold will never appear no matter how often we ask.
 	if l.billingPayloadsHydrated {
 		return false
+	}
+	// Object-only writes ignore all DB-resident exclusions. The policy owner
+	// restores this transient flag from persisted metadata before billing reads.
+	if l.PayloadStoragePolicy == PayloadStorageObjectOnly {
+		return true
 	}
 	// Content-hidden rows are eligible for billing-only hydration even though ordinary
 	// serving reads never hydrate them — but eligible is not the same as force-fetched.

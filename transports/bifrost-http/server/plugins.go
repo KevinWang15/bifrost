@@ -87,6 +87,11 @@ func loadBuiltinPlugin(ctx context.Context, name string, pluginConfig any, bifro
 			loggingConfig.ObjectStorageEnabled = bifrostConfig.LogsStoreConfig != nil &&
 				bifrostConfig.LogsStoreConfig.ObjectStorage != nil
 		}
+		// Wrap the log store so conversation content is encrypted at the
+		// persistence seam (no-op unless log encryption is enabled via env).
+		// Encrypted entries also select the HybridLogStore object-only payload
+		// projection: S3 keeps the carrier, while DB list rows retain only scalar
+		// metadata and a fixed non-sensitive summary marker.
 		logsStore := logencryption.WrapLogStoreFromEnv(bifrostConfig.LogsStore, logger)
 		return logging.Init(ctx, loggingConfig, logger, logsStore,
 			bifrostConfig.ConfigStore, bifrostConfig.ModelCatalog, bifrostConfig.MCPCatalog)

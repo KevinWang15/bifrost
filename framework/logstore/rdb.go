@@ -1342,7 +1342,7 @@ var billingPayloadColumns = map[string][]string{
 // job's cursor bookkeeping.
 //
 // Deliberately NOT built on listSelectColumns: that projection serves /api/logs and
-// carries message previews, content summaries, metadata and every denormalized
+// carries message previews, metadata and every denormalized
 // governance name — none of which pricing looks at. A recompute holds a whole batch in
 // memory at once, so every column it does not need is pure ballast.
 var billingScalarColumns = []string{
@@ -1363,6 +1363,8 @@ var billingScalarColumns = []string{
 	"batch_debug",
 	// Whether the payload was offloaded, and whether it can ever be fetched back.
 	"has_object", "content_hidden",
+	// Storage-policy decorators recognize historical rows from their summary marker.
+	"content_summary",
 	// Served tier: scales every token rate.
 	"service_tier", "speed", "inference_geo",
 }

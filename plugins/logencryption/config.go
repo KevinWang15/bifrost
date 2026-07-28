@@ -34,8 +34,8 @@ func (r failSecureResolver) Resolve(context.Context, string, string) (*Policy, e
 }
 
 // WrapLogStoreFromEnv returns an encrypting decorator around inner when log
-// encryption is enabled via environment configuration; otherwise it returns
-// inner unchanged. This keeps the upstream call site a single conditional wrap.
+// encryption is enabled via environment configuration. When disabled, only the
+// billing policy for historical encrypted rows is retained; writes pass through.
 //
 // Fail-secure invariant: when encryption is ENABLED but incompletely configured,
 // this does NOT return the plaintext store. It returns a decorator backed by a
@@ -48,7 +48,7 @@ func WrapLogStoreFromEnv(inner logstore.LogStore, logger schemas.Logger) logstor
 		return inner
 	}
 	if !boolEnv(envEnabled) {
-		return inner
+		return &billingPolicyStore{LogStore: inner}
 	}
 	baseURL := os.Getenv(envPortalBaseURL)
 	secret := os.Getenv(envInternalSecret)

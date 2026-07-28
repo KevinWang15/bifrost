@@ -27,12 +27,9 @@ func mustChatMsgs(t *testing.T, raw string) []schemas.ChatMessage {
 	return m
 }
 
-// TestReadPathBaseline is a diagnostic/regression test that proves what Bifrost's
-// real list read path (SearchLogs, the query the Portal audit page uses) returns
-// for content fields — BOTH for a plaintext row (encryption OFF baseline) and for
-// an envelope row (what our decorator writes). This nails down the read-path
-// behavior the holistic review flagged, using the real framework logstore over
-// sqlite (no LLM/auth/full stack needed).
+// TestReadPathBaseline is a diagnostic/regression test for database-only
+// storage. It proves what Bifrost's real list path returns for plaintext and
+// envelope-shaped fields without object-storage hydration.
 func TestReadPathBaseline(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "logs.db")
@@ -75,8 +72,8 @@ func TestReadPathBaseline(t *testing.T) {
 		Provider:      "openai",
 		Model:         "gpt-x",
 		Status:        "success",
-		InputHistory:  `{"__jq_log_encryption_v1":true,"version":1,"status":"encrypted","field":"input_history","content_ciphertext":"Y2lwaGVy"}`,
-		OutputMessage: `{"__jq_log_encryption_v1":true,"version":1,"status":"encrypted","field":"output_message","content_ciphertext":"Y2lwaGVy"}`,
+		InputHistory:  `{"__jq_log_encryption_v2":true,"version":2,"status":"encrypted","field":"input_history","content_encoding":"gzip","content_ciphertext":"Y2lwaGVy"}`,
+		OutputMessage: `{"__jq_log_encryption_v2":true,"version":2,"status":"encrypted","field":"output_message","content_encoding":"gzip","content_ciphertext":"Y2lwaGVy"}`,
 	}
 	if err := store.BatchCreateIfNotExists(ctx, []*logstore.Log{plain, env}); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -119,11 +116,9 @@ func TestReadPathBaseline(t *testing.T) {
 	}
 }
 
-// TestDisguisedEnvelopeSurvivesReadPath validates route 甲+丙: if the envelope is
-// carried INSIDE a well-formed ChatMessage (content = envelope JSON string), it
-// passes DeserializeFields intact (both input []ChatMessage and output
-// *ChatMessage), and — via the DETAIL path (FindByID, no list truncation) —
-// full input+output are returned. This is the zero-upstream-change approach.
+// TestDisguisedEnvelopeSurvivesReadPath validates the database-only detail
+// path: an envelope carried inside a well-formed ChatMessage survives
+// DeserializeFields intact.
 func TestDisguisedEnvelopeSurvivesReadPath(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "logs.db")
@@ -143,7 +138,7 @@ func TestDisguisedEnvelopeSurvivesReadPath(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Disguise: envelope JSON carried as the string content of a single message.
-	envJSON := `{"__jq_log_encryption_v1":true,"version":1,"status":"encrypted","field":"input_history","content_ciphertext":"Y2lwaGVy"}`
+	envJSON := `{"__jq_log_encryption_v2":true,"version":2,"status":"encrypted","field":"input_history","content_encoding":"gzip","content_ciphertext":"Y2lwaGVy"}`
 	inputDisguised := mustChatMsgs(t, `[{"role":"user","content":`+jsonString(envJSON)+`}]`)
 	outputDisguised := mustChatMsg(t, `{"role":"assistant","content":`+jsonString(envJSON)+`}`)
 
@@ -195,13 +190,10 @@ func mustChatMsg(t *testing.T, raw string) *schemas.ChatMessage {
 	return &m
 }
 
-// TestBundleCarrierSurvivesListPath is the decisive end-to-end read-path test:
-// it runs the REAL encrypt() decorator over a multi-turn conversation, persists
-// via the real logstore, then reads back through the real SearchLogs LIST path
-// (the exact query Portal uses — which NULLs output_message and returns only the
-// last input_history element). It asserts the single bundle carrier survives
-// intact and decrypts to the full input+output.
-func TestBundleCarrierSurvivesListPath(t *testing.T) {
+// TestBundleCarrierSurvivesDatabaseOnlyListPath covers the no-S3 storage mode.
+// PayloadStorageObjectOnly is intentionally ignored by a database-only store,
+// so the encrypted carrier remains the authoritative DB payload.
+func TestBundleCarrierSurvivesDatabaseOnlyListPath(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "logs.db")
 	if f, err := os.Create(dbPath); err != nil {

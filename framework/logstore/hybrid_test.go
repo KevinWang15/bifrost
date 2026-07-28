@@ -3,6 +3,7 @@ package logstore
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,25 @@ func (hybridTestLogger) SetLevel(schemas.LogLevel)              {}
 func (hybridTestLogger) SetOutputType(schemas.LoggerOutputType) {}
 func (hybridTestLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
 	return schemas.NoopLogEvent
+}
+
+type gatedObjectStore struct {
+	objectstore.ObjectStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedObjectStore) Put(ctx context.Context, key string, data []byte, tags map[string]string) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+		return s.ObjectStore.Put(ctx, key, data, tags)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newTestHybrid(t *testing.T) (*HybridLogStore, LogStore, *objectstore.InMemoryObjectStore) {
@@ -576,6 +596,94 @@ func TestHybrid_PutFailureDropsUpload(t *testing.T) {
 	assert.False(t, found.HasObject, "has_object should remain false when upload fails")
 }
 
+func TestHybrid_ObjectOnlyBatchDoesNotWaitForObjectUpload(t *testing.T) {
+	ctx := context.Background()
+	inner, err := newSqliteLogStore(
+		ctx,
+		&SQLiteConfig{Path: filepath.Join(t.TempDir(), "hybrid.db")},
+		hybridTestLogger{},
+	)
+	require.NoError(t, err)
+	gated := &gatedObjectStore{
+		ObjectStore: objectstore.NewInMemoryObjectStore(),
+		started:     make(chan struct{}, 1),
+		release:     make(chan struct{}),
+	}
+	hybrid := newHybridLogStore(inner, gated, "test", hybridTestLogger{}, nil)
+	defer hybrid.Close(context.Background())
+	defer close(gated.release)
+
+	content := "encrypted audit payload"
+	entry := &Log{
+		ID:                   "object-only-async",
+		Timestamp:            time.Now().UTC(),
+		Provider:             "openai",
+		Model:                "gpt-4",
+		Status:               "success",
+		Object:               "chat.completion",
+		ContentSummary:       "[encrypted:v2]",
+		PayloadStoragePolicy: PayloadStorageObjectOnly,
+		InputHistoryParsed: []schemas.ChatMessage{{
+			Role:    schemas.ChatMessageRoleUser,
+			Content: &schemas.ChatMessageContent{ContentStr: &content},
+		}},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- hybrid.BatchCreateIfNotExists(ctx, []*Log{entry})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("batch write waited for the object upload")
+	}
+	select {
+	case <-gated.started:
+	case <-time.After(time.Second):
+		t.Fatal("object upload was not enqueued")
+	}
+
+	dbRow, err := inner.FindByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.False(t, dbRow.HasObject)
+	assert.Empty(t, dbRow.InputHistory)
+	assert.Equal(t, "[encrypted:v2]", dbRow.ContentSummary)
+}
+
+func TestHybrid_ObjectOnlyPutFailureKeepsMetadataRow(t *testing.T) {
+	hybrid, inner, objStore := newTestHybrid(t)
+	defer hybrid.Close(context.Background())
+	objStore.PutErr = assert.AnError
+
+	content := "encrypted audit payload"
+	entry := &Log{
+		ID:                   "object-only-put-failure",
+		Timestamp:            time.Now().UTC(),
+		Provider:             "openai",
+		Model:                "gpt-4",
+		Status:               "success",
+		Object:               "chat.completion",
+		ContentSummary:       "[encrypted:v2]",
+		PayloadStoragePolicy: PayloadStorageObjectOnly,
+		InputHistoryParsed: []schemas.ChatMessage{{
+			Role:    schemas.ChatMessageRoleUser,
+			Content: &schemas.ChatMessageContent{ContentStr: &content},
+		}},
+	}
+
+	require.NoError(t, hybrid.BatchCreateIfNotExists(context.Background(), []*Log{entry}))
+	waitForUploads(t, func() bool { return hybrid.DroppedUploads() == 1 })
+
+	dbRow, err := inner.FindByID(context.Background(), entry.ID)
+	require.NoError(t, err)
+	assert.False(t, dbRow.HasObject)
+	assert.Empty(t, dbRow.InputHistory)
+	assert.Equal(t, "[encrypted:v2]", dbRow.ContentSummary)
+}
+
 func TestHybrid_DeleteLog(t *testing.T) {
 	hybrid, _, objStore := newTestHybrid(t)
 	defer hybrid.Close(context.Background())
@@ -688,11 +796,11 @@ func TestHybrid_MetadataIsRetainedInDBAndWrittenToObjectPayload(t *testing.T) {
 }
 
 func TestHybrid_ContentSummaryIsInputOnly(t *testing.T) {
-	hybrid, inner, _ := newTestHybrid(t)
+	hybrid, inner, objStore := newTestHybrid(t)
 	defer hybrid.Close(context.Background())
 	ctx := context.Background()
 
-	inputText := "What is the capital of France?"
+	inputText := strings.Repeat("What is the capital of France? ", 100)
 	outputText := "The capital of France is Paris."
 	entry := &Log{
 		ID:        "summary-1",
@@ -716,6 +824,86 @@ func TestHybrid_ContentSummaryIsInputOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, dbLog.ContentSummary, "capital of France")
 	assert.NotContains(t, dbLog.ContentSummary, "Paris", "content_summary should not contain output text")
+	assert.LessOrEqual(t, len(dbLog.ContentSummary), maxContentSummaryBytes)
+
+	waitForUploads(t, func() bool { return objStore.Len() == 1 })
+	rawPayload, err := objStore.Get(ctx, ObjectKey("test", entry.Timestamp, entry.ID))
+	require.NoError(t, err)
+	var payload map[string]string
+	require.NoError(t, sonic.Unmarshal(rawPayload, &payload))
+	assert.Equal(t, dbLog.ContentSummary, payload[payloadContentSummaryKey])
+	assert.NotContains(t, payload[payloadContentSummaryKey], "Paris")
+
+	detail, err := hybrid.FindByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, dbLog.ContentSummary, detail.ContentSummary)
+}
+
+func TestHybrid_ObjectOnlyPayloadKeepsDBMetadataOnlyAndHydratesDetail(t *testing.T) {
+	// Include input_history in the store-wide DB retention list to prove the
+	// per-entry object-only contract wins: otherwise the payload could be
+	// omitted from S3 and then cleared from the DB.
+	hybrid, inner, objStore := newTestHybridWithExclude(t, []string{"input_history"})
+	defer hybrid.Close(context.Background())
+	ctx := context.Background()
+
+	const summaryMarker = "[protected-content]"
+	inputText := strings.Repeat("object-only-input-", 4096)
+	outputText := strings.Repeat("object-only-output-", 4096)
+	entry := &Log{
+		ID:                   "object-only-1",
+		Timestamp:            time.Now().UTC(),
+		Provider:             "openai",
+		Model:                "gpt-4",
+		Status:               "success",
+		Object:               "chat.completion",
+		ContentSummary:       summaryMarker,
+		PayloadStoragePolicy: PayloadStorageObjectOnly,
+		InputHistoryParsed: []schemas.ChatMessage{{
+			Role:    schemas.ChatMessageRoleUser,
+			Content: &schemas.ChatMessageContent{ContentStr: &inputText},
+		}},
+		OutputMessageParsed: &schemas.ChatMessage{
+			Role:    schemas.ChatMessageRoleAssistant,
+			Content: &schemas.ChatMessageContent{ContentStr: &outputText},
+		},
+	}
+
+	require.NoError(t, hybrid.CreateIfNotExists(ctx, entry))
+	waitForUploads(t, func() bool {
+		dbLog, err := inner.FindByID(ctx, entry.ID)
+		return err == nil && dbLog.HasObject
+	})
+
+	dbLog, err := inner.FindByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.True(t, dbLog.HasObject)
+	assert.Equal(t, summaryMarker, dbLog.ContentSummary)
+	assert.Empty(t, dbLog.InputHistory)
+	assert.Empty(t, dbLog.OutputMessage)
+	assert.Nil(t, dbLog.InputHistoryParsed)
+	assert.Nil(t, dbLog.OutputMessageParsed)
+
+	result, err := hybrid.SearchLogs(ctx, SearchFilters{}, PaginationOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, result.Logs, 1)
+	assert.Equal(t, summaryMarker, result.Logs[0].ContentSummary)
+	assert.Empty(t, result.Logs[0].InputHistory)
+	assert.Empty(t, result.Logs[0].OutputMessage)
+
+	key := ObjectKey("test", entry.Timestamp, entry.ID)
+	rawPayload, err := objStore.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawPayload), "object-only-input-")
+	assert.Contains(t, string(rawPayload), "object-only-output-")
+
+	detail, err := hybrid.FindByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, summaryMarker, detail.ContentSummary)
+	require.Len(t, detail.InputHistoryParsed, 1)
+	require.NotNil(t, detail.OutputMessageParsed)
+	assert.Equal(t, inputText, *detail.InputHistoryParsed[0].Content.ContentStr)
+	assert.Equal(t, outputText, *detail.OutputMessageParsed.Content.ContentStr)
 }
 
 func TestHybrid_ResponsesInputHistoryPreservesLastUserMessage(t *testing.T) {

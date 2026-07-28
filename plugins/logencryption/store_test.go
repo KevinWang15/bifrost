@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/maximhq/bifrost/core/schemas"
@@ -38,16 +38,13 @@ func (c *captureStore) BatchCreateIfNotExists(_ context.Context, entries []*logs
 	return nil
 }
 
-// captureUpdateStore records the last Update map passed through the decorator.
 type captureUpdateStore struct {
 	logstore.LogStore
-	lastUpdate map[string]interface{}
+	lastUpdate any
 }
 
 func (c *captureUpdateStore) Update(_ context.Context, _ string, entry any) error {
-	if m, ok := entry.(map[string]interface{}); ok {
-		c.lastUpdate = m
-	}
+	c.lastUpdate = entry
 	return nil
 }
 
@@ -105,6 +102,9 @@ func TestEncryptedTeamWithOwnerKey(t *testing.T) {
 	if got.ContentSummary != summarySentinel {
 		t.Fatalf("content summary must be sentinel, got %q", got.ContentSummary)
 	}
+	if got.PayloadStoragePolicy != logstore.PayloadStorageObjectOnly {
+		t.Fatalf("encrypted payload must be object-only in hybrid mode, got %d", got.PayloadStoragePolicy)
+	}
 	if got.OutputMessage != "" || got.OutputMessageParsed != nil {
 		t.Fatal("output must be folded into the carrier, not left in its own field")
 	}
@@ -123,6 +123,105 @@ func TestEncryptedTeamWithOwnerKey(t *testing.T) {
 	// Boss can also open the same bundle.
 	if _, err := envelope.Open(env, "boss-v1", bossPriv); err != nil {
 		t.Fatalf("boss open bundle: %v", err)
+	}
+}
+
+func TestEncryptedWriterRetryIsIdempotent(t *testing.T) {
+	bossPriv, bossInfo, _ := genPub(t)
+	bossInfo.KID = "boss-v1"
+
+	inner := &captureStore{}
+	store := NewEncryptingLogStore(inner, &fakeResolver{policy: &Policy{
+		TeamID: "team_1", UserID: "alice", Encrypt: true,
+		BossPublicKey: bossInfo,
+	}}, nil)
+	entry := newEntry()
+
+	if err := store.BatchCreateIfNotExists(context.Background(), []*logstore.Log{entry}); err != nil {
+		t.Fatal(err)
+	}
+	firstCarrier := carrierContent(t, entry)
+
+	// The logging writer retries the same pointer after a failed batch.
+	if err := store.BatchCreateIfNotExists(context.Background(), []*logstore.Log{entry}); err != nil {
+		t.Fatal(err)
+	}
+	secondCarrier := carrierContent(t, entry)
+	if secondCarrier != firstCarrier {
+		t.Fatal("retry must reuse the installed carrier instead of nesting a new envelope")
+	}
+
+	bundle := openBundle(t, carrierEnvelope(t, entry), "boss-v1", bossPriv)
+	if string(bundle.InputHistory) != `[{"role":"user","content":"secret input"}]` {
+		t.Fatalf("retry changed decrypted input: %s", bundle.InputHistory)
+	}
+	if string(bundle.OutputMessage) != `{"role":"assistant","content":"secret output"}` {
+		t.Fatalf("retry changed decrypted output: %s", bundle.OutputMessage)
+	}
+}
+
+func TestPayloadFieldEncryptionClassificationIsExhaustive(t *testing.T) {
+	// Auxiliary payload fields are intentionally allowed to remain cleartext
+	// under the accepted deployment policy. Keeping every field explicit makes
+	// future Bifrost additions fail this test until they receive a deliberate
+	// encryption classification.
+	classification := map[string]string{
+		"input_history":             "encrypted",
+		"responses_input_history":   "encrypted",
+		"output_message":            "encrypted",
+		"responses_output":          "encrypted",
+		"raw_request":               "cleared",
+		"raw_response":              "cleared",
+		"embedding_output":          "allowed-cleartext",
+		"rerank_output":             "allowed-cleartext",
+		"ocr_input":                 "allowed-cleartext",
+		"ocr_output":                "allowed-cleartext",
+		"params":                    "allowed-cleartext",
+		"tools":                     "allowed-cleartext",
+		"tool_calls":                "allowed-cleartext",
+		"speech_input":              "allowed-cleartext",
+		"transcription_input":       "allowed-cleartext",
+		"image_generation_input":    "allowed-cleartext",
+		"image_edit_input":          "allowed-cleartext",
+		"image_variation_input":     "allowed-cleartext",
+		"video_generation_input":    "allowed-cleartext",
+		"video_edit_input":          "allowed-cleartext", // Same modality policy as video generation.
+		"speech_output":             "allowed-cleartext",
+		"transcription_output":      "allowed-cleartext",
+		"image_generation_output":   "allowed-cleartext",
+		"list_models_output":        "allowed-cleartext",
+		"video_generation_output":   "allowed-cleartext",
+		"video_retrieve_output":     "allowed-cleartext",
+		"video_download_output":     "allowed-cleartext",
+		"video_list_output":         "allowed-cleartext",
+		"video_delete_output":       "allowed-cleartext",
+		"cache_debug":               "allowed-cleartext",
+		"guardrail_debug":           "allowed-cleartext", // Judge metadata, matching error/cache diagnostics policy.
+		"token_usage":               "allowed-cleartext",
+		"error_details":             "allowed-cleartext",
+		"passthrough_request_body":  "allowed-cleartext",
+		"passthrough_response_body": "allowed-cleartext",
+		"routing_engine_logs":       "allowed-cleartext",
+	}
+
+	seen := make(map[string]struct{})
+	for _, field := range logstore.PayloadFieldNames() {
+		if _, duplicate := seen[field]; duplicate {
+			t.Errorf("payload field %q is duplicated", field)
+		}
+		seen[field] = struct{}{}
+		if _, classified := classification[field]; !classified {
+			t.Errorf("payload field %q has no encryption classification", field)
+		}
+		delete(classification, field)
+	}
+	if len(classification) != 0 {
+		leftover := make([]string, 0, len(classification))
+		for field := range classification {
+			leftover = append(leftover, field)
+		}
+		sort.Strings(leftover)
+		t.Fatalf("classification contains fields no longer present in logstore: %v", leftover)
 	}
 }
 
@@ -165,6 +264,9 @@ func TestExemptTeamPassthrough(t *testing.T) {
 	if got.ContentSummary != "secret input" {
 		t.Fatalf("exempt summary must be preserved, got %q", got.ContentSummary)
 	}
+	if got.PayloadStoragePolicy != logstore.PayloadStorageDefault {
+		t.Fatalf("exempt payload must keep the default storage policy, got %d", got.PayloadStoragePolicy)
+	}
 	if envelope.IsEnvelope([]byte(got.InputHistory)) {
 		t.Fatal("exempt input must not be an envelope")
 	}
@@ -184,6 +286,9 @@ func TestPolicyErrorFailsSecure(t *testing.T) {
 	}
 	if got.ContentSummary != summarySentinel {
 		t.Fatalf("summary must be sentinel on fail-secure, got %q", got.ContentSummary)
+	}
+	if got.PayloadStoragePolicy != logstore.PayloadStorageObjectOnly {
+		t.Fatalf("fail-secure payload must be object-only in hybrid mode, got %d", got.PayloadStoragePolicy)
 	}
 	// Absolutely no plaintext may survive anywhere.
 	if wantAbsent := "secret"; contains(got.InputHistory, wantAbsent) || contains(got.OutputMessage, wantAbsent) ||
@@ -297,28 +402,48 @@ func TestNoPlaintextAfterSerializeFields(t *testing.T) {
 	}
 }
 
-// TestContentUpdateScrubbed verifies the defensive Update path never lets a
-// content-bearing update map carry plaintext to storage.
-func TestContentUpdateScrubbed(t *testing.T) {
+func TestMetadataUpdatePassesThroughUnchanged(t *testing.T) {
 	inner := &captureUpdateStore{}
-	s := NewEncryptingLogStore(inner, &fakeResolver{}, nil)
-
+	store := NewEncryptingLogStore(inner, &fakeResolver{}, nil)
 	updates := map[string]interface{}{
-		"output_message":  `{"role":"assistant","content":"secret update"}`,
-		"content_summary": "secret update",
+		"total_tokens": 42,
+		"cost":         0.25,
+		"has_object":   true,
+	}
+
+	if err := store.Update(context.Background(), "req_meta", updates); err != nil {
+		t.Fatalf("metadata update: %v", err)
+	}
+	got, ok := inner.lastUpdate.(map[string]interface{})
+	if !ok ||
+		got["total_tokens"] != 42 ||
+		got["cost"] != 0.25 ||
+		got["has_object"] != true {
+		t.Fatalf("metadata update was not passed through unchanged: %+v", inner.lastUpdate)
+	}
+}
+
+func TestSerializedContentUpdateRejectedWithoutMutation(t *testing.T) {
+	inner := &captureUpdateStore{}
+	store := NewEncryptingLogStore(inner, &fakeResolver{}, nil)
+	const plaintext = `{"role":"assistant","content":"exempt plaintext"}`
+	updates := map[string]interface{}{
+		"output_message":  plaintext,
+		"content_summary": "exempt plaintext",
 		"total_tokens":    42,
 	}
-	if err := s.Update(context.Background(), "req_u", updates); err != nil {
-		t.Fatal(err)
+
+	err := store.Update(context.Background(), "req_content", updates)
+	if err == nil {
+		t.Fatal("content-bearing update map must be rejected")
 	}
-	if contains(fmt.Sprint(inner.lastUpdate["output_message"]), "secret") {
-		t.Fatalf("plaintext survived Update: %v", inner.lastUpdate["output_message"])
+	if inner.lastUpdate != nil {
+		t.Fatal("rejected content update reached the inner store")
 	}
-	if inner.lastUpdate["content_summary"] != summarySentinel {
-		t.Fatalf("content_summary not scrubbed: %v", inner.lastUpdate["content_summary"])
-	}
-	if inner.lastUpdate["total_tokens"] != 42 {
-		t.Fatalf("non-content update mangled: %v", inner.lastUpdate["total_tokens"])
+	if updates["output_message"] != plaintext ||
+		updates["content_summary"] != "exempt plaintext" ||
+		updates["total_tokens"] != 42 {
+		t.Fatalf("rejected update was mutated: %+v", updates)
 	}
 }
 
@@ -408,11 +533,49 @@ func TestWrapFailsSecureWhenEnabledButMisconfigured(t *testing.T) {
 	}
 }
 
-// TestWrapDisabledReturnsInner confirms the default-off path is a true no-op.
-func TestWrapDisabledReturnsInner(t *testing.T) {
+// Disabling new encryption must preserve plaintext writes while retaining the
+// billing policy for previously encrypted rows.
+func TestWrapDisabledPreservesWrites(t *testing.T) {
 	t.Setenv(envEnabled, "")
 	inner := &captureStore{}
-	if WrapLogStoreFromEnv(inner, nil) != logstore.LogStore(inner) {
-		t.Fatal("disabled must return the inner store unchanged (zero impact)")
+	entry := newEntry()
+	if err := WrapLogStoreFromEnv(inner, nil).BatchCreateIfNotExists(context.Background(), []*logstore.Log{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if inner.batch[0].ContentSummary != "secret input" || inner.batch[0].InputHistory != entry.InputHistory {
+		t.Fatal("disabled encryption changed the plaintext write")
+	}
+}
+
+type billingCaptureStore struct{ logstore.LogStore }
+
+func (s *billingCaptureStore) HydrateBillingChunk(_ context.Context, rows []*logstore.Log) (logstore.BillingHydrationResult, error) {
+	return logstore.BillingHydrationResult{}, nil
+}
+
+func TestBillingRestoresHistoricalObjectOnlyPolicy(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv(envEnabled, enabled)
+			t.Setenv(envPortalBaseURL, "")
+			t.Setenv(envInternalSecret, "")
+			rows := []*logstore.Log{nil,
+				{ContentSummary: summarySentinel, HasObject: true},
+				{ContentSummary: "ordinary summary", HasObject: true},
+				{ContentSummary: "[encrypted]", HasObject: true},
+			}
+			store := WrapLogStoreFromEnv(&billingCaptureStore{}, nil)
+			if _, err := store.HydrateBillingChunk(context.Background(), rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows[1].PayloadStoragePolicy != logstore.PayloadStorageObjectOnly {
+				t.Fatal("historical v2 policy lost")
+			}
+			for _, row := range rows[2:] {
+				if row.PayloadStoragePolicy != logstore.PayloadStorageDefault {
+					t.Fatal("ordinary or v1 storage policy changed")
+				}
+			}
+		})
 	}
 }

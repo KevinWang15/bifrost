@@ -199,7 +199,7 @@ export function getMessage(log?: LogEntry) {
 		return "Image file";
 	}
 	if (log?.content_summary) {
-		return log.content_summary;
+		return encryptedContentLabel(log.content_summary) ?? log.content_summary;
 	}
 	return "";
 }

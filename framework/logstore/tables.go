@@ -293,6 +293,7 @@ type Log struct {
 	ChildrenCost   float64 `gorm:"-" json:"children_cost,omitempty"`
 	ChildrenTokens int64   `gorm:"-" json:"children_tokens,omitempty"`
 
+	PayloadStoragePolicy   PayloadStoragePolicy          `gorm:"-" json:"-"`                           // Transient HybridLogStore payload projection policy
 	RedactionData          *schemas.RedactionData        `gorm:"-" json:"-"`                           // Transient guardrail redaction data consumed by enterprise logstore wrappers
 	RedactionMapping       string                        `gorm:"type:text" json:"-"`                   // Reversible redaction mapping (encrypted when an encryption key is set), written by enterprise logstore wrappers; deleted with the row
 	RevealRedactionMapping *schemas.RedactionMapsByPhase `gorm:"-" json:"redaction_mapping,omitempty"` // Virtual field populated only on permitted log-detail reads

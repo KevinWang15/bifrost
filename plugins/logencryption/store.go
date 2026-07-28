@@ -14,6 +14,7 @@ package logencryption
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/logstore"
@@ -31,7 +32,23 @@ type EncryptingLogStore struct {
 
 // NewEncryptingLogStore wraps inner with encryption driven by resolver.
 func NewEncryptingLogStore(inner logstore.LogStore, resolver PolicyResolver, logger schemas.Logger) *EncryptingLogStore {
-	return &EncryptingLogStore{LogStore: inner, resolver: resolver, logger: logger}
+	return &EncryptingLogStore{LogStore: &billingPolicyStore{LogStore: inner}, resolver: resolver, logger: logger}
+}
+
+// billingPolicyStore restores the object-only policy on historical encrypted
+// rows. It also remains active when encryption of new requests is disabled.
+// The v2 summary was persisted by 1.6, so this needs no schema/data migration.
+type billingPolicyStore struct {
+	logstore.LogStore
+}
+
+func (s *billingPolicyStore) HydrateBillingChunk(ctx context.Context, logs []*logstore.Log) (logstore.BillingHydrationResult, error) {
+	for _, entry := range logs {
+		if entry != nil && entry.ContentSummary == summarySentinel {
+			entry.PayloadStoragePolicy = logstore.PayloadStorageObjectOnly
+		}
+	}
+	return s.LogStore.HydrateBillingChunk(ctx, logs)
 }
 
 // Create encrypts then delegates.
@@ -55,84 +72,69 @@ func (s *EncryptingLogStore) BatchCreateIfNotExists(ctx context.Context, entries
 	return s.LogStore.BatchCreateIfNotExists(ctx, entries)
 }
 
-// contentUpdateKeys are the GORM update-map keys that carry conversation content.
-// If any appears in an Update, we must not let plaintext reach storage.
-var contentUpdateKeys = []string{
-	"input_history",
-	"output_message",
-	"responses_input_history",
-	"responses_output",
-	"content_summary",
-	"raw_request",
-	"raw_response",
+// contentUpdateKeys are the serialized fields that must never bypass the
+// policy-aware whole-Log encryption seam. The current logging runtime writes a
+// complete Log through BatchCreateIfNotExists; generic Update maps are reserved
+// for metadata such as deferred usage and object-store state.
+var contentUpdateKeys = map[string]struct{}{
+	"input_history":           {},
+	"output_message":          {},
+	"responses_input_history": {},
+	"responses_output":        {},
+	"content_summary":         {},
+	"raw_request":             {},
+	"raw_response":            {},
 }
 
-// Update defends the content path. The live logging flow builds complete entries
-// via BatchCreateIfNotExists and only uses Update for usage/metadata; but
-// updateLogEntry can build a map containing content keys. Since an update map
-// carries serialized strings (and may lack the vk/team needed to resolve policy
-// or wrap recipients), we fail secure: any content-bearing key is replaced with
-// a not-recorded placeholder rather than risk persisting plaintext. Non-content
-// updates (token usage, cost, status, errors) pass through unchanged.
+// Update passes metadata-only maps through unchanged. A serialized
+// content-bearing map cannot be safely merged into an existing encrypted bundle
+// because the writer does not hold a decrypt key, so reject it rather than
+// silently replacing exempt plaintext or persisting unencrypted content.
+//
+// A caller that intentionally replaces the complete payload may provide a
+// complete Log; it goes through the same policy-aware transform as Create.
 func (s *EncryptingLogStore) Update(ctx context.Context, id string, entry any) error {
-	switch v := entry.(type) {
+	switch value := entry.(type) {
 	case map[string]interface{}:
-		s.scrubUpdateMap(id, v)
+		for key := range contentUpdateKeys {
+			if _, present := value[key]; present {
+				return fmt.Errorf(
+					"log-encryption: content-bearing update key %q requires a complete Log",
+					key,
+				)
+			}
+		}
 	case *logstore.Log:
-		// Struct updates run SerializeFields in RDB (rdb.go serializeLogUpdateEntry),
-		// which would serialize content-bearing parsed fields to plaintext columns.
-		// Route through the same encrypt transform so content is sealed/fail-secure.
-		s.encrypt(ctx, v)
+		s.encrypt(ctx, value)
 	case logstore.Log:
-		s.encrypt(ctx, &v)
-		return s.LogStore.Update(ctx, id, v)
+		s.encrypt(ctx, &value)
+		return s.LogStore.Update(ctx, id, value)
 	}
 	return s.LogStore.Update(ctx, id, entry)
-}
-
-// scrubUpdateMap fail-secures a content-bearing GORM update map. An update map
-// carries serialized strings and may lack the vk/team needed to resolve policy
-// or wrap recipients, so any content-bearing key is replaced with a not-recorded
-// placeholder rather than risk persisting plaintext. Non-content updates (token
-// usage, cost, status, errors) are left untouched.
-func (s *EncryptingLogStore) scrubUpdateMap(id string, m map[string]interface{}) {
-	scrubbed := false
-	for _, k := range contentUpdateKeys {
-		if _, present := m[k]; !present {
-			continue
-		}
-		switch k {
-		case "content_summary":
-			m[k] = summarySentinel
-		case "input_history":
-			m[k] = mustJSON(envelope.NotRecorded(envelope.FieldInputHistory, envelope.ReasonPolicyUnavailable))
-		case "output_message":
-			m[k] = mustJSON(envelope.NotRecorded(envelope.FieldOutputMessage, envelope.ReasonPolicyUnavailable))
-		case "responses_input_history":
-			m[k] = mustJSON(envelope.NotRecorded(envelope.FieldResponsesInputHistory, envelope.ReasonPolicyUnavailable))
-		case "responses_output":
-			m[k] = mustJSON(envelope.NotRecorded(envelope.FieldResponsesOutput, envelope.ReasonPolicyUnavailable))
-		case "raw_request", "raw_response":
-			m[k] = ""
-		}
-		scrubbed = true
-	}
-	if scrubbed {
-		s.warn("log-encryption: content-bearing Update scrubbed to fail-secure placeholders for id %s", id)
-	}
 }
 
 // summarySentinel is written to ContentSummary for encrypted teams. It MUST be
 // non-empty: SerializeFields regenerates ContentSummary from the parsed content
 // fields whenever ContentSummary == "" (framework/logstore/tables.go:645), which
 // would re-derive plaintext. A non-empty sentinel suppresses that regeneration.
-const summarySentinel = "[encrypted]"
+//
+// This v2 value is intentionally distinct from the retained v1 "[encrypted]"
+// sentinel so read clients can recognize either generation without inspecting
+// or exposing the carrier.
+const summarySentinel = "[encrypted:v2]"
 
 // encrypt transforms a single Log entry's content fields in place according to
 // policy. It never returns an error: on any policy/crypto failure it applies a
 // fail-secure placeholder so plaintext is never persisted.
 func (s *EncryptingLogStore) encrypt(ctx context.Context, entry *logstore.Log) {
 	if entry == nil {
+		return
+	}
+	// The async logging writer retries failed batches as individual entries.
+	// Keep that retry idempotent: once this decorator has installed a complete
+	// v2 carrier, encrypting the same Log again would nest one envelope inside
+	// another and make a later successful object upload unreadable.
+	if hasInstalledCarrier(entry) {
 		return
 	}
 	hasInput := entry.InputHistory != "" || entry.InputHistoryParsed != nil
@@ -199,6 +201,10 @@ func (s *EncryptingLogStore) encrypt(ctx context.Context, entry *logstore.Log) {
 // go through here so they can never drift apart (e.g. forget to blank a column).
 func installCarrier(entry *logstore.Log, envelopeJSON string) {
 	content := envelopeJSON
+	// In hybrid mode the encrypted bundle is the authoritative object payload,
+	// not a DB list preview. Database-only stores ignore this transient policy
+	// and continue to persist the encrypted carrier as their payload.
+	entry.PayloadStoragePolicy = logstore.PayloadStorageObjectOnly
 	entry.InputHistory = ""
 	entry.InputHistoryParsed = []schemas.ChatMessage{{
 		Role:    schemas.ChatMessageRoleUser,

@@ -5,6 +5,33 @@ import type { LogEntry } from "@/lib/types/logs";
 import { getMessage } from "./columns";
 
 describe("getMessage", () => {
+	it.each([
+		["v1", "__jq_log_encryption_v1", "encrypted", "Encrypted log content"],
+		["v2", "__jq_log_encryption_v2", "encrypted", "Encrypted log content"],
+		["v2 not recorded", "__jq_log_encryption_v2", "content_not_recorded", "Content not recorded"],
+	])("renders %s envelope as a safe label", (_name, marker, status, expected) => {
+		const envelope = JSON.stringify({
+			[marker]: true,
+			version: marker.endsWith("v2") ? 2 : 1,
+			status,
+			content_ciphertext: "secret-ciphertext",
+		});
+		const log = {
+			input_history: [{ role: "user", content: envelope }],
+		} as LogEntry;
+
+		expect(getMessage(log)).toBe(expected);
+		expect(getMessage(log)).not.toContain("secret-ciphertext");
+	});
+
+	it.each(["[encrypted]", "[encrypted:v2]"])(
+		"renders metadata-only summary %s as a safe label",
+		(contentSummary) => {
+			const log = { content_summary: contentSummary } as LogEntry;
+			expect(getMessage(log)).toBe("Encrypted log content");
+		},
+	);
+
 	it("returns EI realtime text from input history", () => {
 		const log = {
 			object: "realtime.turn",

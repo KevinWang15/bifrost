@@ -10,6 +10,32 @@ GitHub: `maximhq/bifrost`
 
 ---
 
+## Internal Fork Workflow
+
+This checkout is the internal Bifrost fork used by the production LLM Gateway:
+
+- `upstream` points to the public `maximhq/bifrost` repository.
+- `origin` points to the internal GitLab repository and its `main` branch is the base for internal feature work.
+- Gateway and Portal code lives in the sibling `../llm-gateway/bifrost-gateway/` tree.
+- Production Ansible and environment configuration lives in the sibling `../llm-gateway-deploy/` repository.
+
+For normal internal changes, branch from the current internal `origin/main`, keep each logical change in its own MR, and target internal `main`. Do not develop from an old release or already-merged feature branch. Record active work and remaining decisions in GitLab Issue/MR rather than in a workstation-only task file.
+
+Upstream upgrades are a separate release operation: merge a released `transports/vX.Y.Z` tag, not an arbitrary upstream `main`, and preserve the internal patches. In particular, verify the internal image targets and the encrypted audit-log storage path after conflict resolution. The detailed repeatable procedure lives in `.claude/skills/sync-release/SKILL.md`.
+
+The internal image tag is derived from:
+
+```text
+transports/version + transports/internal_version
+→ v<upstream-version>-<internal-version>
+```
+
+`make push-bifrost` builds and publishes that tag. Publishing an image and changing a production environment are distinct operations: only publish when explicitly authorized, then give the deployment owner the exact tag, tests run, configuration or migration changes, and rollback notes. The deployment owner updates `llm-gateway-deploy` and performs the production rollout.
+
+Production SSH credentials, environment files, certificates, provider keys and database backups do not belong in this repository or a developer handoff.
+
+---
+
 ## Repository Layout
 
 Gateway-wide setup/configuration that is not source code lives outside this source tree at the relative directory `../llm-gateway/bifrost-gateway/`. From this repository root, treat the source tree as `.` and the gateway setup tree as `../llm-gateway/bifrost-gateway/`. The setup tree has its own `AGENTS.md` that points back to this source root with the relative path `../../bifrost`.

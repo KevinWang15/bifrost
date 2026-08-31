@@ -4,12 +4,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/valyala/fasthttp"
 )
 
 type loginDecodeConfigStore struct {
 	configstore.ConfigStore
+}
+
+func TestPrepareResponsesRequestRecognizesCacheControl(t *testing.T) {
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.SetBodyString(`{"model":"openrouter/anthropic/claude-haiku-4.5","input":"hello","cache_control":{"type":"ephemeral"}}`)
+
+	req, base, err := prepareRequest[ResponsesRequest](ctx, nil, responsesParamsKnownFields)
+	if err != nil {
+		t.Fatalf("prepare request: %v", err)
+	}
+	if req.CacheControl == nil || req.CacheControl.Type != schemas.CacheControlTypeEphemeral {
+		t.Fatalf("cache_control = %#v, want ephemeral", req.CacheControl)
+	}
+	if _, ok := base.ExtraParams["cache_control"]; ok {
+		t.Fatal("cache_control must be a typed Responses parameter, not an extra parameter")
+	}
 }
 
 func TestSessionLoginInvalidPayloadDoesNotExposeDecoderDetails(t *testing.T) {

@@ -922,6 +922,8 @@ func (resp *OpenAIResponsesRequest) MarshalJSON() ([]byte, error) {
 	// - Input shadows the embedded Input field and uses json.RawMessage to preserve custom marshaling
 	// - Reasoning shadows the embedded ResponsesParameters.Reasoning
 	//   so that we can modify max_tokens before marshaling
+	// - CacheControl shadows the embedded ResponsesParameters.CacheControl
+	//   so that it is forwarded only to OpenRouter, which supports this extension
 	aux := struct {
 		*Alias
 		// Shadow the embedded "input" field to use custom marshaling
@@ -930,10 +932,15 @@ func (resp *OpenAIResponsesRequest) MarshalJSON() ([]byte, error) {
 		Reasoning *schemas.ResponsesParametersReasoning `json:"reasoning,omitempty"`
 		// Shadow the embedded "tools" field to use processed tools
 		Tools []schemas.ResponsesTool `json:"tools,omitempty"`
+		// Shadow the embedded "cache_control" field for provider-specific filtering
+		CacheControl *schemas.CacheControl `json:"cache_control,omitempty"`
 	}{
 		Alias: (*Alias)(resp),
 		Input: json.RawMessage(inputBytes),
 		Tools: processedTools,
+	}
+	if resp.Provider == schemas.OpenRouter {
+		aux.CacheControl = resp.CacheControl
 	}
 
 	// Copy reasoning but set MaxTokens to nil

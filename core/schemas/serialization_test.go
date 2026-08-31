@@ -1744,6 +1744,18 @@ func TestSonic_PromptCacheOptions_RoundTrip(t *testing.T) {
 	assert.Equal(t, "30m", *resp.PromptCacheOptions.TTL)
 }
 
+func TestSonic_ResponsesCacheControl_RoundTrip(t *testing.T) {
+	in := ResponsesParameters{CacheControl: &CacheControl{Type: CacheControlTypeEphemeral}}
+
+	out, err := Marshal(in)
+	require.NoError(t, err)
+
+	var back ResponsesParameters
+	require.NoError(t, Unmarshal(out, &back))
+	require.NotNil(t, back.CacheControl)
+	assert.Equal(t, CacheControlTypeEphemeral, back.CacheControl.Type)
+}
+
 func TestSonic_PromptCacheBreakpoint_RoundTrip(t *testing.T) {
 	mode := "explicit"
 

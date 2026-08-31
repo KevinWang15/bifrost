@@ -9,6 +9,42 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 )
 
+func TestOpenAIResponsesRequest_CacheControl_OpenRouterOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider schemas.ModelProvider
+		wantKept bool
+	}{
+		{name: "openrouter preserves cache_control", provider: schemas.OpenRouter, wantKept: true},
+		{name: "openai strips cache_control", provider: schemas.OpenAI, wantKept: false},
+		{name: "gemini strips cache_control", provider: schemas.Gemini, wantKept: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &OpenAIResponsesRequest{
+				Model:    "anthropic/claude-haiku-4.5",
+				Provider: tt.provider,
+				Input: OpenAIResponsesRequestInput{
+					OpenAIResponsesRequestInputStr: schemas.Ptr("hello"),
+				},
+				ResponsesParameters: schemas.ResponsesParameters{
+					CacheControl: &schemas.CacheControl{Type: schemas.CacheControlTypeEphemeral},
+				},
+			}
+
+			wireBody, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			hasCacheControl := strings.Contains(string(wireBody), `"cache_control"`)
+			if hasCacheControl != tt.wantKept {
+				t.Fatalf("cache_control presence = %t, want %t; body=%s", hasCacheControl, tt.wantKept, wireBody)
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesRequest_MarshalJSON_ReasoningMaxTokensAbsent(t *testing.T) {
 	tests := []struct {
 		name        string

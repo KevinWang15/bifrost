@@ -162,6 +162,7 @@ var responsesParamsKnownFields = map[string]bool{
 	"fallbacks":              true,
 	"stream":                 true,
 	"background":             true,
+	"cache_control":          true,
 	"conversation":           true,
 	"include":                true,
 	"instructions":           true,

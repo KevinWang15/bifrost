@@ -12,6 +12,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/logencryption"
 	"github.com/maximhq/bifrost/plugins/logging"
 	"github.com/maximhq/bifrost/plugins/maxim"
+	"github.com/maximhq/bifrost/plugins/modelcapabilityvalidator"
 	"github.com/maximhq/bifrost/plugins/modelcatalogresolver"
 	"github.com/maximhq/bifrost/plugins/otel"
 	"github.com/maximhq/bifrost/plugins/prompts"
@@ -149,6 +150,9 @@ func loadBuiltinPlugin(ctx context.Context, name string, pluginConfig any, bifro
 
 	case modelcatalogresolver.PluginName:
 		return modelcatalogresolver.Init(bifrostConfig.ModelCatalog, logger)
+
+	case modelcapabilityvalidator.PluginName:
+		return modelcapabilityvalidator.Init(bifrostConfig.ModelCatalog)
 
 	default:
 		return nil, fmt.Errorf("unknown built-in plugin: %s", name)
@@ -307,10 +311,20 @@ func (s *BifrostHTTPServer) loadBuiltinPlugins(ctx context.Context) error {
 	} else {
 		s.markPluginDisabled(modelcatalogresolver.PluginName)
 	}
-	// Place it in post_builtin with a max order so it runs after every other routing plugin,
+	// Place it in post_builtin near the max order so it runs after every other routing plugin,
 	// including post_builtin ones like the enterprise load balancer (which would otherwise run
 	// after this builtin and never get a chance to pick the provider first).
-	s.Config.SetPluginOrderInfo(modelcatalogresolver.PluginName, schemas.Ptr(schemas.PluginPlacementPostBuiltin), schemas.Ptr(math.MaxInt))
+	s.Config.SetPluginOrderInfo(modelcatalogresolver.PluginName, schemas.Ptr(schemas.PluginPlacementPostBuiltin), schemas.Ptr(math.MaxInt-1))
+
+	// 10. ModelCapabilityValidator (final request gate — validates the provider/model selected
+	// by all routing layers against explicit model capability metadata). PreLLMHook runs once
+	// per attempt, so fallbacks are independently validated against their selected model.
+	if s.Config.ModelCatalog != nil {
+		s.registerPluginWithStatus(ctx, modelcapabilityvalidator.PluginName, nil, nil, false)
+	} else {
+		s.markPluginDisabled(modelcapabilityvalidator.PluginName)
+	}
+	s.Config.SetPluginOrderInfo(modelcapabilityvalidator.PluginName, schemas.Ptr(schemas.PluginPlacementPostBuiltin), schemas.Ptr(math.MaxInt))
 
 	return nil
 }

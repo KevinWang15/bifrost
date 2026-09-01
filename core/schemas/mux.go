@@ -1545,6 +1545,14 @@ type ChatToResponsesStreamState struct {
 	CurrentOutputIndex    int               // Current output index counter
 	ToolCallOutputIndices map[string]int    // Maps tool call ID to output index
 	SequenceNumber        int               // Monotonic sequence number across all chunks
+
+	structuredOutputToolName      string
+	structuredOutputRequestID     string
+	structuredOutputLogger        Logger
+	hasLoggedStructuredOutput     bool
+	structuredOutputToolCallID    string
+	structuredOutputToolCallIndex uint16
+	hasStructuredOutputToolCall   bool
 }
 
 // chatToResponsesStreamStatePool provides a pool for ChatToResponsesStreamState objects.
@@ -1600,6 +1608,13 @@ func AcquireChatToResponsesStreamState() *ChatToResponsesStreamState {
 		clear(state.ToolCallOutputIndices)
 	}
 	// Reset other fields
+	state.structuredOutputToolName = ""
+	state.structuredOutputRequestID = ""
+	state.structuredOutputLogger = nil
+	state.hasLoggedStructuredOutput = false
+	state.structuredOutputToolCallID = ""
+	state.structuredOutputToolCallIndex = 0
+	state.hasStructuredOutputToolCall = false
 	state.CurrentOutputIndex = 0
 	state.MessageID = nil
 	state.Model = nil
@@ -1639,6 +1654,13 @@ func ReleaseChatToResponsesStreamState(state *ChatToResponsesStreamState) {
 			clear(state.ToolCallOutputIndices)
 		}
 		// Reset other fields
+		state.structuredOutputToolName = ""
+		state.structuredOutputRequestID = ""
+		state.structuredOutputLogger = nil
+		state.hasLoggedStructuredOutput = false
+		state.structuredOutputToolCallID = ""
+		state.structuredOutputToolCallIndex = 0
+		state.hasStructuredOutputToolCall = false
 		state.CurrentOutputIndex = 0
 		state.MessageID = nil
 		state.Model = nil
@@ -1657,6 +1679,14 @@ func ReleaseChatToResponsesStreamState(state *ChatToResponsesStreamState) {
 		state.SequenceNumber = 0
 		chatToResponsesStreamStatePool.Put(state)
 	}
+}
+
+// ConfigureStructuredOutputToolCompatibility configures conversion of an
+// internal final-response tool into ordinary Responses output text.
+func (state *ChatToResponsesStreamState) ConfigureStructuredOutputToolCompatibility(toolName, requestID string, logger Logger) {
+	state.structuredOutputToolName = toolName
+	state.structuredOutputRequestID = requestID
+	state.structuredOutputLogger = logger
 }
 
 // ToBifrostResponsesStreamResponse converts the BifrostChatResponse from Chat streaming format to Responses streaming format
@@ -1691,6 +1721,47 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 	}
 
 	var responses []*BifrostResponsesStreamResponse
+
+	// A provider fallback may represent a structured final response as an
+	// internal function tool. Convert its argument deltas to output-text deltas
+	// before the normal Chat-to-Responses state machine sees them.
+	if state.structuredOutputToolName != "" && len(delta.ToolCalls) > 0 {
+		remainingToolCalls := make([]ChatAssistantMessageToolCall, 0, len(delta.ToolCalls))
+		for _, toolCall := range delta.ToolCalls {
+			isStructuredOutputTool := false
+			if toolCall.Function.Name != nil && *toolCall.Function.Name == state.structuredOutputToolName {
+				isStructuredOutputTool = true
+				state.structuredOutputToolCallIndex = toolCall.Index
+				state.hasStructuredOutputToolCall = true
+				if toolCall.ID != nil && *toolCall.ID != "" {
+					state.structuredOutputToolCallID = *toolCall.ID
+				}
+			} else if state.hasStructuredOutputToolCall && toolCall.Index == state.structuredOutputToolCallIndex {
+				isStructuredOutputTool = true
+			} else if toolCall.ID != nil && *toolCall.ID != "" && *toolCall.ID == state.structuredOutputToolCallID {
+				isStructuredOutputTool = true
+			}
+
+			if !isStructuredOutputTool {
+				remainingToolCalls = append(remainingToolCalls, toolCall)
+				continue
+			}
+
+			if toolCall.Function.Arguments != "" {
+				if delta.Content == nil {
+					delta.Content = Ptr(toolCall.Function.Arguments)
+				} else {
+					combined := *delta.Content + toolCall.Function.Arguments
+					delta.Content = &combined
+				}
+			}
+			if !state.hasLoggedStructuredOutput && state.structuredOutputLogger != nil {
+				state.structuredOutputLogger.Debug("[responses-fallback] restored internal structured-output tool call as Responses output text: request_id=%q stream=true internal_tool=%q", state.structuredOutputRequestID, state.structuredOutputToolName)
+				state.hasLoggedStructuredOutput = true
+			}
+		}
+		delta.ToolCalls = remainingToolCalls
+	}
 
 	// Store message ID and model from first chunk
 	if state.MessageID == nil && cr.ID != "" {
@@ -2088,6 +2159,9 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 
 	// Check if this is a completion chunk with finish_reason
 	if choice.FinishReason != nil {
+		if state.hasStructuredOutputToolCall && len(state.ToolArgumentBuffers) == 0 && *choice.FinishReason == string(BifrostFinishReasonToolCalls) {
+			choice.FinishReason = Ptr(string(BifrostFinishReasonStop))
+		}
 		terminalEventType, terminalStatus, terminalIncompleteDetails := responsesTerminalFromChatFinishReason(choice.FinishReason)
 
 		// Close reasoning item if the stream ends while it is still open (reasoning-only

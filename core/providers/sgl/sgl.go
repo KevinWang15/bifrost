@@ -333,10 +333,16 @@ func (provider *SGLProvider) Responses(ctx *schemas.BifrostContext, key schemas.
 		)
 	}
 
-	chatResponse, err := provider.ChatCompletion(ctx, key, request.ToChatRequest())
+	chatRequest, compatibilityErr := provider.toCompatibleResponsesChatRequest(ctx, request)
+	if compatibilityErr != nil {
+		return nil, compatibilityErr
+	}
+
+	chatResponse, err := provider.ChatCompletion(ctx, key, chatRequest)
 	if err != nil {
 		return nil, err
 	}
+	provider.restoreSGLStructuredOutputResponse(ctx, chatResponse)
 
 	response := chatResponse.ToBifrostResponsesResponse()
 
@@ -383,13 +389,18 @@ func (provider *SGLProvider) ResponsesStream(ctx *schemas.BifrostContext, postHo
 		)
 	}
 
+	chatRequest, compatibilityErr := provider.toCompatibleResponsesChatRequest(ctx, request)
+	if compatibilityErr != nil {
+		return nil, compatibilityErr
+	}
+
 	ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
 	return provider.ChatCompletionStream(
 		ctx,
 		postHookRunner,
 		postHookSpanFinalizer,
 		key,
-		request.ToChatRequest(),
+		chatRequest,
 	)
 }
 

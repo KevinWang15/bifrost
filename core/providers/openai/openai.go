@@ -1047,6 +1047,10 @@ func HandleOpenAIChatCompletionStreaming(
 		if ok && isResponsesToChatCompletionsFallbackValue {
 			isResponsesToChatCompletionsFallback = true
 			responsesStreamState = schemas.AcquireChatToResponsesStreamState()
+			if toolName, ok := ctx.Value(schemas.BifrostContextKeyStructuredOutputToolName).(string); ok {
+				requestID, _ := ctx.Value(schemas.BifrostContextKeyRequestID).(string)
+				responsesStreamState.ConfigureStructuredOutputToolCompatibility(toolName, requestID, logger)
+			}
 		}
 	}
 

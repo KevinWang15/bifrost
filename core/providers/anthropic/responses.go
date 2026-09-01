@@ -3690,7 +3690,7 @@ func toAnthropicResponsesStreamEvents(ctx *schemas.BifrostContext, bifrostResp *
 	case schemas.ResponsesStreamResponseTypePing:
 		streamResp.Type = AnthropicStreamEventTypePing
 
-	case schemas.ResponsesStreamResponseTypeCompleted:
+	case schemas.ResponsesStreamResponseTypeCompleted, schemas.ResponsesStreamResponseTypeIncomplete:
 		streamResp.Type = AnthropicStreamEventTypeMessageStop
 		// If a message_delta was already emitted from the upstream event, only emit message_stop
 		// to avoid sending a duplicate message_delta to the client.
@@ -3710,6 +3710,15 @@ func toAnthropicResponsesStreamEvents(ctx *schemas.BifrostContext, bifrostResp *
 			if bifrostResp.Response.StopReason != nil {
 				anthropicContentDeltaEvent.Delta = &AnthropicStreamDelta{
 					StopReason:   schemas.Ptr(ConvertBifrostFinishReasonToAnthropic(*bifrostResp.Response.StopReason)),
+					StopSequence: nil,
+				}
+			} else if bifrostResp.Response.IncompleteDetails != nil {
+				stopReason := AnthropicStopReason(bifrostResp.Response.IncompleteDetails.Reason)
+				if bifrostResp.Response.IncompleteDetails.Reason == schemas.ResponsesResponseIncompleteReasonMaxOutputTokens {
+					stopReason = AnthropicStopReasonMaxTokens
+				}
+				anthropicContentDeltaEvent.Delta = &AnthropicStreamDelta{
+					StopReason:   schemas.Ptr(stopReason),
 					StopSequence: nil,
 				}
 			}

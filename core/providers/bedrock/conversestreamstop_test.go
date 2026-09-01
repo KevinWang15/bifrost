@@ -112,6 +112,35 @@ func TestConverseStreamTextBlockEmitsContentBlockStop(t *testing.T) {
 	}
 }
 
+func TestConverseStreamIncompleteEmitsMessageStop(t *testing.T) {
+	chunks := []*schemas.BifrostResponsesStreamResponse{
+		{
+			Type: schemas.ResponsesStreamResponseTypeIncomplete,
+			Response: &schemas.BifrostResponsesResponse{
+				Status: schemas.Ptr(schemas.ResponsesResponseStatusIncomplete),
+				IncompleteDetails: &schemas.ResponsesResponseIncompleteDetails{
+					Reason: schemas.ResponsesResponseIncompleteReasonMaxOutputTokens,
+				},
+				Usage: &schemas.ResponsesResponseUsage{InputTokens: 10, OutputTokens: 8, TotalTokens: 18},
+			},
+		},
+	}
+
+	events := encodeConverseStream(t, chunks)
+	want := []string{"messageStop", "metadata"}
+	if got := encodedEventTypes(events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("event sequence mismatch:\n  want %v\n  got  %v", want, got)
+	}
+
+	payload, ok := events[0].Payload.(BedrockMessageStopEvent)
+	if !ok {
+		t.Fatalf("messageStop payload type = %T, want BedrockMessageStopEvent", events[0].Payload)
+	}
+	if payload.StopReason != "max_tokens" {
+		t.Fatalf("messageStop stopReason = %q, want max_tokens", payload.StopReason)
+	}
+}
+
 // TestConverseStreamToolUseBlockEmitsContentBlockStop covers a tool use block: the
 // contentBlockStart(toolUse) opened at OutputItemAdded must be closed by a
 // contentBlockStop carrying the same block index, before messageStop.

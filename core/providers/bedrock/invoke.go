@@ -1714,12 +1714,9 @@ func toAnthropicInvokeStreamBytes(resp *schemas.BifrostResponsesStreamResponse) 
 		// Skip — the content_block_stop is emitted on OutputItemDone
 		return nil, nil
 
-	case schemas.ResponsesStreamResponseTypeCompleted:
+	case schemas.ResponsesStreamResponseTypeCompleted, schemas.ResponsesStreamResponseTypeIncomplete:
 		// Emit message_delta + message_stop as two separate events
-		stopReason := "end_turn"
-		if resp.Response != nil && resp.Response.IncompleteDetails != nil {
-			stopReason = resp.Response.IncompleteDetails.Reason
-		}
+		stopReason := responsesStopReasonToBedrock(resp.Response)
 
 		// Build message_delta event
 		messageDelta := map[string]interface{}{

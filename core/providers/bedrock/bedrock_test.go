@@ -5569,6 +5569,56 @@ func TestToBedrockInvokeMessagesStreamResponse_NoDuplicateContentBlockStop(t *te
 	assert.Equal(t, 1, stopCount, "expected exactly one content_block_stop event, got %d", stopCount)
 }
 
+func TestToBedrockInvokeMessagesStreamResponse_IncompleteEmitsTerminalEvents(t *testing.T) {
+	ctx := &schemas.BifrostContext{}
+	model := "anthropic.claude-opus-5"
+	response := &schemas.BifrostResponsesStreamResponse{
+		Type: schemas.ResponsesStreamResponseTypeIncomplete,
+		Response: &schemas.BifrostResponsesResponse{
+			Model:      model,
+			StopReason: schemas.Ptr(string(schemas.BifrostFinishReasonLength)),
+			Status:     schemas.Ptr(schemas.ResponsesResponseStatusIncomplete),
+			IncompleteDetails: &schemas.ResponsesResponseIncompleteDetails{
+				Reason: schemas.ResponsesResponseIncompleteReasonMaxOutputTokens,
+			},
+			Usage: &schemas.ResponsesResponseUsage{OutputTokens: 8},
+		},
+		ExtraFields: schemas.BifrostResponseExtraFields{OriginalModelRequested: model},
+	}
+
+	_, result, err := bedrock.ToBedrockInvokeMessagesStreamResponse(ctx, response)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	var chunk struct {
+		InvokeModelRawChunks [][]byte `json:"invokeModelRawChunks"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &chunk))
+	require.Len(t, chunk.InvokeModelRawChunks, 2)
+
+	var messageDelta struct {
+		Type  string `json:"type"`
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+		Usage struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	require.NoError(t, json.Unmarshal(chunk.InvokeModelRawChunks[0], &messageDelta))
+	assert.Equal(t, "message_delta", messageDelta.Type)
+	assert.Equal(t, "max_tokens", messageDelta.Delta.StopReason)
+	assert.Equal(t, 8, messageDelta.Usage.OutputTokens)
+
+	var messageStop struct {
+		Type string `json:"type"`
+	}
+	require.NoError(t, json.Unmarshal(chunk.InvokeModelRawChunks[1], &messageStop))
+	assert.Equal(t, "message_stop", messageStop.Type)
+}
+
 func TestToolResultImageContentResponsesAPI(t *testing.T) {
 	// Minimal 1x1 red PNG
 	pngBase64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"

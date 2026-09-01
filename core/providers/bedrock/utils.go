@@ -172,10 +172,11 @@ var (
 
 	// bifrostToBedrockStopReason is the reverse of bedrockFinishReasonToBifrost.
 	bifrostToBedrockStopReason = map[string]string{
-		"stop":           "end_turn",
-		"length":         "max_tokens",
-		"tool_calls":     "tool_use",
-		"content_filter": "content_filtered",
+		"stop":              "end_turn",
+		"length":            "max_tokens",
+		"max_output_tokens": "max_tokens",
+		"tool_calls":        "tool_use",
+		"content_filter":    "content_filtered",
 	}
 )
 
@@ -201,6 +202,19 @@ func convertBifrostToBedrockStopReason(bifrostReason string) string {
 		return reason
 	}
 	return bifrostReason
+}
+
+func responsesStopReasonToBedrock(response *schemas.BifrostResponsesResponse) string {
+	if response == nil {
+		return "end_turn"
+	}
+	if response.StopReason != nil {
+		return convertBifrostToBedrockStopReason(*response.StopReason)
+	}
+	if response.IncompleteDetails != nil {
+		return convertBifrostToBedrockStopReason(response.IncompleteDetails.Reason)
+	}
+	return "end_turn"
 }
 
 // mapBifrostServiceTierToBedrock maps a BifrostServiceTier to a BedrockServiceTierType.

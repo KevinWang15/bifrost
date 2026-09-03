@@ -1645,7 +1645,12 @@ func HandleOpenAIResponsesRequest(
 		ctx,
 		request,
 		func() (providerUtils.RequestBodyWithExtraParams, error) {
-			return ToOpenAIResponsesRequest(ctx, request), nil
+			reqBody := ToOpenAIResponsesRequest(ctx, request)
+			if reqBody != nil {
+				// Prevent downstream gateways from forwarding an omitted value as null.
+				reqBody.Stream = schemas.Ptr(false)
+			}
+			return reqBody, nil
 		})
 	if bifrostErr != nil {
 		return nil, bifrostErr

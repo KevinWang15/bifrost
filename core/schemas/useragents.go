@@ -20,7 +20,7 @@ var (
 	// APIClient identifies generic programmatic API clients.
 	APIClient = UserAgentIdentifiers{"fasthttp"}
 	// CodexCLI identifies requests from Codex CLI clients.
-	CodexCLI = UserAgentIdentifiers{"codex-cli", "codex-tui"}
+	CodexCLI = UserAgentIdentifiers{"codex-cli", "codex-tui", "codex_exec", "codex-mcp-client"}
 	// CodexDesktop identifies requests from the Codex desktop app.
 	CodexDesktop = UserAgentIdentifiers{"codex-desktop", "codex desktop/", "codex/"}
 	// Cursor identifies requests from Cursor clients.

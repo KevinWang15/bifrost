@@ -770,7 +770,9 @@ func TestParseAndAddToolsToRequest_CodexCLI_MCPHyphenUnderscoreVariantsDeduped(t
 	tm := newToolsManagerForTest(cm)
 
 	req := buildChatRequest()
-	ctx := contextWithUserAgent(schemas.CodexCLI.String())
+	// Exercise the user agent emitted by current non-interactive Codex releases,
+	// not only the legacy codex-tui identifier.
+	ctx := contextWithUserAgent("codex_exec/0.152.1 (Ubuntu 26.4.0; x86_64)")
 
 	result := tm.ParseAndAddToolsToRequest(ctx, req)
 
@@ -922,7 +924,7 @@ func TestParseAndAddToolsToRequest_ResponsesAPI_CodexCLI_MCPHyphenUnderscoreVari
 	tm := newToolsManagerForTest(cm)
 
 	req := buildResponsesRequest()
-	ctx := contextWithUserAgent(schemas.CodexCLI.String())
+	ctx := contextWithUserAgent("codex_exec/0.152.1 (Ubuntu 26.4.0; x86_64)")
 
 	result := tm.ParseAndAddToolsToRequest(ctx, req)
 
@@ -956,7 +958,7 @@ func TestParseAndAddToolsToRequest_ResponsesAPI_CodexNamespaceChildrenAreNotRein
 			Name: &nestedName,
 		}}},
 	}}
-	ctx := contextWithUserAgent(schemas.CodexCLI.String())
+	ctx := contextWithUserAgent("codex_exec/0.152.1 (Ubuntu 26.4.0; x86_64)")
 
 	result := tm.ParseAndAddToolsToRequest(ctx, req)
 	names := toolNamesFromResponsesRequest(result)

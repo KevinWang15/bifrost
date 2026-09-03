@@ -87,3 +87,32 @@ func TestMatchUserAgent(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexCLIUserAgentIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	for _, userAgent := range []string{
+		"codex-tui/0.42.0",
+		"codex_exec/0.152.1 (Ubuntu 26.4.0; x86_64)",
+		"codex-mcp-client/0.152.1",
+	} {
+		if !CodexCLI.Matches(userAgent) {
+			t.Errorf("CodexCLI.Matches(%q) = false, want true", userAgent)
+		}
+	}
+}
+
+func TestExtractAndSetCodexExecUserAgent(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := NewBifrostContextWithCancel(t.Context())
+	defer cancel()
+	userAgent := "codex_exec/0.152.1 (Ubuntu 26.4.0; x86_64)"
+	ExtractAndSetUserAgentFromHeaders(map[string][]string{
+		"User-Agent": {userAgent},
+	}, ctx)
+
+	if got, _ := ctx.Value(BifrostContextKeyUserAgent).(string); got != userAgent {
+		t.Fatalf("stored user agent = %q, want %q", got, userAgent)
+	}
+}

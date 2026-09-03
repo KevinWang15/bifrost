@@ -32,6 +32,16 @@ func cloneBifrostReq(req *schemas.BifrostRequest) *schemas.BifrostRequest {
 	if req.ResponsesRequest != nil {
 		responsesReq := *req.ResponsesRequest
 		cloned.ResponsesRequest = &responsesReq
+		if req.ResponsesRequest.Input != nil {
+			responsesReq.Input = make([]schemas.ResponsesMessage, len(req.ResponsesRequest.Input))
+			copy(responsesReq.Input, req.ResponsesRequest.Input)
+			for i := range responsesReq.Input {
+				if req.ResponsesRequest.Input[i].ResponsesToolMessage != nil {
+					toolMessage := *req.ResponsesRequest.Input[i].ResponsesToolMessage
+					responsesReq.Input[i].ResponsesToolMessage = &toolMessage
+				}
+			}
+		}
 		if req.ResponsesRequest.Params != nil {
 			cloned.ResponsesRequest.Params = cloneResponsesParameters(req.ResponsesRequest.Params)
 		}

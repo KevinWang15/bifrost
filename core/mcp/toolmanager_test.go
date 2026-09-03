@@ -935,6 +935,39 @@ func TestParseAndAddToolsToRequest_ResponsesAPI_CodexCLI_MCPHyphenUnderscoreVari
 	}
 }
 
+func TestParseAndAddToolsToRequest_ResponsesAPI_CodexNamespaceChildrenAreNotReinjected(t *testing.T) {
+	t.Parallel()
+
+	cm := &mockToolClientManager{
+		tools: []schemas.ChatTool{
+			makeTool("exa-web_search_exa"),
+			makeTool("unrelated-tool"),
+		},
+	}
+	tm := newToolsManagerForTest(cm)
+	namespace := "mcp__bifrost"
+	nestedName := "exa_web_search_exa"
+	req := buildResponsesRequest()
+	req.ResponsesRequest.Params.Tools = []schemas.ResponsesTool{{
+		Type: schemas.ResponsesToolTypeNamespace,
+		Name: &namespace,
+		ResponsesToolNamespace: &schemas.ResponsesToolNamespace{Tools: []schemas.ResponsesTool{{
+			Type: schemas.ResponsesToolTypeFunction,
+			Name: &nestedName,
+		}}},
+	}}
+	ctx := contextWithUserAgent(schemas.CodexCLI.String())
+
+	result := tm.ParseAndAddToolsToRequest(ctx, req)
+	names := toolNamesFromResponsesRequest(result)
+	if countOccurrences(names, "exa-web_search_exa") != 0 {
+		t.Fatalf("Codex namespace child was reinjected as a bare MCP tool: %v", names)
+	}
+	if countOccurrences(names, "unrelated-tool") != 1 {
+		t.Fatalf("unrelated MCP tool should still be injected once: %v", names)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OpenCode — pattern: {server_name}_{tool_name} (no mcp_ prefix, hyphens preserved)
 // ---------------------------------------------------------------------------

@@ -457,6 +457,44 @@ func markToolSeenInDuplicateCheckMap(duplicateCheckMap map[string]bool, toolName
 	}
 }
 
+// responsesToolsForDuplicateCheck projects both ordinary function tools and
+// the children of namespace tools into the existing duplicate-check machinery.
+// The canonical namespace-qualified name supports CLI-specific matching, while
+// the logical child name prevents an exact duplicate for generic callers.
+func responsesToolsForDuplicateCheck(tools []schemas.ResponsesTool) []schemas.ChatTool {
+	existing := make([]schemas.ChatTool, 0, len(tools))
+	appendName := func(name string) {
+		if name == "" {
+			return
+		}
+		existing = append(existing, schemas.ChatTool{
+			Type: schemas.ChatToolTypeFunction,
+			Function: &schemas.ChatToolFunction{
+				Name: name,
+			},
+		})
+	}
+
+	for _, tool := range tools {
+		if tool.Type != schemas.ResponsesToolTypeNamespace || tool.ResponsesToolNamespace == nil {
+			if tool.Name != nil {
+				appendName(*tool.Name)
+			}
+			continue
+		}
+		for _, nested := range tool.ResponsesToolNamespace.Tools {
+			if nested.Name == nil {
+				continue
+			}
+			appendName(*nested.Name)
+			if tool.Name != nil && *tool.Name != "" {
+				appendName(*tool.Name + "__" + *nested.Name)
+			}
+		}
+	}
+	return existing
+}
+
 // ParseAndAddToolsToRequest parses the available tools per client and adds them to the Bifrost request.
 //
 // Parameters:
@@ -535,18 +573,11 @@ func (m *ToolsManager) ParseAndAddToolsToRequest(ctx *schemas.BifrostContext, re
 
 			tools := req.ResponsesRequest.Params.Tools
 
-			// Convert Responses tools to ChatTool format for duplicate checking
-			existingChatTools := make([]schemas.ChatTool, 0, len(tools))
-			for _, tool := range tools {
-				if tool.Name != nil {
-					existingChatTools = append(existingChatTools, schemas.ChatTool{
-						Type: schemas.ChatToolTypeFunction,
-						Function: &schemas.ChatToolFunction{
-							Name: *tool.Name,
-						},
-					})
-				}
-			}
+			// Convert Responses tools to ChatTool format for duplicate checking.
+			// Namespace children must participate individually: MCP-aware clients
+			// such as Codex already own execution of those tools, so Bifrost must
+			// not auto-inject a second unnamespaced copy of the same MCP function.
+			existingChatTools := responsesToolsForDuplicateCheck(tools)
 
 			// Build integration-aware duplicate check map
 			duplicateCheckMap := buildIntegrationDuplicateCheckMap(existingChatTools, integrationUserAgentStr, m.logger)

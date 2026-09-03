@@ -94,8 +94,14 @@ func (p *CompatPlugin) HTTPTransportPostHook(ctx *schemas.BifrostContext, req *s
 	return nil
 }
 
-// HTTPTransportStreamChunkHook passes through streaming chunks unchanged.
+// HTTPTransportStreamChunkHook restores function calls flattened for providers
+// that do not understand OpenAI's namespace tool extension.
 func (p *CompatPlugin) HTTPTransportStreamChunkHook(ctx *schemas.BifrostContext, req *schemas.HTTPRequest, chunk *schemas.BifrostStreamChunk) (*schemas.BifrostStreamChunk, error) {
+	if ctx != nil && chunk != nil && chunk.BifrostResponsesStreamResponse != nil {
+		if codec, ok := ctx.Value(namespaceToolCodecContextKey{}).(*namespaceToolCodec); ok {
+			restoreNamespacedStreamResponse(chunk.BifrostResponsesStreamResponse, codec)
+		}
+	}
 	return chunk, nil
 }
 
@@ -162,7 +168,9 @@ func (p *CompatPlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.Bifr
 	}
 
 	if (shouldConvertParamsOverride && shouldConvertParamsOverrideEnabled) || p.config.ShouldConvertParams {
-		applyParameterConversion(modifiedReq)
+		if codec := applyParameterConversion(modifiedReq); codec != nil {
+			ctx.SetValue(namespaceToolCodecContextKey{}, codec)
+		}
 	}
 
 	return modifiedReq, nil, nil
@@ -187,6 +195,10 @@ func (p *CompatPlugin) PostLLMHook(ctx *schemas.BifrostContext, result *schemas.
 	}
 
 	if result != nil {
+		if codec, ok := ctx.Value(namespaceToolCodecContextKey{}).(*namespaceToolCodec); ok {
+			restoreNamespacedResponse(result.ResponsesResponse, codec)
+			restoreNamespacedStreamResponse(result.ResponsesStreamResponse, codec)
+		}
 		if droppedParams, ok := ctx.Value(schemas.BifrostContextKeyCompatDroppedParams).([]string); ok {
 			if extraFields := result.GetExtraFields(); extraFields != nil {
 				extraFields.DroppedCompatPluginParams = droppedParams

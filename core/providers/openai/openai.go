@@ -1548,7 +1548,7 @@ func HandleOpenAIChatCompletionStreaming(
 
 // Responses performs a responses request to the OpenAI API.
 func (provider *OpenAIProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
-	if provider.shouldFallbackResponsesToChat(schemas.ResponsesRequest, schemas.ChatCompletionRequest) {
+	if provider.shouldFallbackResponsesToChat(schemas.ResponsesRequest, schemas.ChatCompletionRequest, request.Model) {
 		chatResponse, err := provider.ChatCompletion(ctx, key, request.ToChatRequest())
 		if err != nil {
 			return nil, err
@@ -1736,7 +1736,7 @@ func HandleOpenAIResponsesRequest(
 
 // ResponsesStream performs a streaming responses request to the OpenAI API.
 func (provider *OpenAIProvider) ResponsesStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-	if provider.shouldFallbackResponsesToChat(schemas.ResponsesStreamRequest, schemas.ChatCompletionStreamRequest) {
+	if provider.shouldFallbackResponsesToChat(schemas.ResponsesStreamRequest, schemas.ChatCompletionStreamRequest, request.Model) {
 		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
 		return provider.ChatCompletionStream(ctx, postHookRunner, postHookSpanFinalizer, key, request.ToChatRequest())
 	}
@@ -2229,10 +2229,18 @@ func HandleOpenAIEmbeddingRequest(
 }
 
 // shouldFallbackResponsesToChat reports whether a Responses call should be
-// transparently translated into Chat Completions. This applies when a custom
-// provider disables the Responses operation but still allows Chat Completions.
-func (provider *OpenAIProvider) shouldFallbackResponsesToChat(responsesOp, chatOp schemas.RequestType) bool {
+// transparently translated into Chat Completions for capability fallbacks or
+// narrowly scoped compatibility shims.
+func (provider *OpenAIProvider) shouldFallbackResponsesToChat(responsesOp, chatOp schemas.RequestType, model string) bool {
 	cfg := provider.customProviderConfig
+	// Work around https://github.com/sgl-project/sglang/issues/35460: SGLang's Kimi-K3 Responses
+	// path forwards an empty text prompt instead of prompt IDs, while Chat Completions works.
+	// TODO: Remove this shim once the upstream SGLang fix is deployed.
+	providerKey := provider.GetProviderKey()
+	isAffectedProvider := providerKey == schemas.ModelProvider("local") || providerKey == schemas.ModelProvider("local_v2")
+	if cfg != nil && isAffectedProvider && model == "Kimi-K3" {
+		return cfg.IsOperationAllowed(chatOp)
+	}
 	if cfg == nil || cfg.AllowedRequests == nil {
 		return false
 	}

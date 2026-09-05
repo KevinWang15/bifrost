@@ -1,0 +1,167 @@
+name: bifrost-cache-reporting
+
+services:
+  mock-provider:
+    image: python:3.14.7-alpine3.24
+    working_dir: /app
+    command: ["python", "/app/server.py"]
+    volumes:
+      - ./mock-provider/server.py:/app/server.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  bifrost:
+    build:
+      context: ../..
+      dockerfile: transports/Dockerfile.local
+      args:
+        VERSION: cache-reporting-dev
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    command:
+      - -host
+      - 0.0.0.0
+      - -port
+      - "8080"
+      - -app-dir
+      - /app/data
+      - -log-level
+      - info
+      - -log-style
+      - pretty
+    ports:
+      - "8080:8080"
+    volumes:
+      - bifrost-data:/app/data
+      - ./bifrost/config.json:/app/data/config.json:ro
+    depends_on:
+      mock-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      bifrost:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  seed-traffic:
+    image: python:3.14.7-alpine3.24
+    working_dir: /app
+    command: ["python", "/app/loadgen.py"]
+    environment:
+      BIFROST_URL: http://bifrost:8080
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - ./loadgen/loadgen.py:/app/loadgen.py:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.30.6
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 1000
+    ports:
+      - "8025:8025"
+    volumes:
+      - mailpit-data:/data
+
+  reporter:
+    build:
+      context: ./reporter
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      REPORT_DATABASE_PATH: ${REPORT_DATABASE_PATH:-/data/reports.db}
+      REPORT_WINDOW: ${REPORT_WINDOW:-24h}
+      REPORT_INTERVAL_SECONDS: ${REPORT_INTERVAL_SECONDS:-86400}
+      CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-60}
+      REPORT_GROUP_BY: ${REPORT_GROUP_BY:-user_id}
+      REPORT_TOP_LIMIT: ${REPORT_TOP_LIMIT:-50}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      REPORT_WEBHOOK_URL: ${REPORT_WEBHOOK_URL:-}
+      REPORT_PUBLIC_BASE_URL: ${REPORT_PUBLIC_BASE_URL:-http://localhost:8091}
+      REPORT_NOTIFICATIONS_FILE: /app/notifications.json
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-http://mock-feishu:8092/hooks/development}
+      FEISHU_SIGNING_SECRET: ${FEISHU_SIGNING_SECRET:-local-feishu-secret}
+      REPORT_WARNING_MISS_PERCENT: ${REPORT_WARNING_MISS_PERCENT:-30}
+      REPORT_CRITICAL_MISS_PERCENT: ${REPORT_CRITICAL_MISS_PERCENT:-60}
+      REPORT_MINIMUM_REQUESTS: ${REPORT_MINIMUM_REQUESTS:-1}
+      REPORT_RETRY_BASE_SECONDS: ${REPORT_RETRY_BASE_SECONDS:-60}
+      REPORT_RETRY_MAX_SECONDS: ${REPORT_RETRY_MAX_SECONDS:-3600}
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - reporter-data:/data
+      - ./notifications.json:/app/notifications.json:ro
+    depends_on:
+      mailpit:
+        condition: service_started
+      mock-feishu:
+        condition: service_healthy
+      seed-traffic:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  mock-feishu:
+    image: python:3.14.7-alpine3.24
+    command: ["python", "/app/server.py"]
+    volumes:
+      - ./mock-feishu/server.py:/app/server.py:ro
+    ports:
+      - "127.0.0.1:8092:8092"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+volumes:
+  bifrost-data:
+  prometheus-data:
+  grafana-data:
+  reporter-data:
+  mailpit-data:

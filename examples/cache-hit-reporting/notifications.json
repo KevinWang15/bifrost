@@ -1,0 +1,16 @@
+[
+  {
+    "id": "email",
+    "type": "email",
+    "smtp_host": "mailpit",
+    "smtp_port": 1025,
+    "sender": "bifrost-reports@example.test",
+    "recipients": ["owner@example.test"]
+  },
+  {
+    "id": "feishu",
+    "type": "feishu",
+    "webhook_url_env": "FEISHU_WEBHOOK_URL",
+    "signing_secret_env": "FEISHU_SIGNING_SECRET"
+  }
+]

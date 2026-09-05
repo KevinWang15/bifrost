@@ -1,0 +1,63 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "providers": {
+    "openai": {
+      "keys": [
+        {
+          "name": "local-mock-key",
+          "value": "not-a-secret",
+          "weight": 1,
+          "models": ["*"]
+        }
+      ],
+      "network_config": {
+        "base_url": "http://mock-provider:8000",
+        "allow_private_network": true,
+        "default_request_timeout_in_seconds": 10,
+        "max_retries": 0
+      }
+    }
+  },
+  "client": {
+    "drop_excess_requests": false,
+    "initial_pool_size": 100,
+    "prometheus_labels": ["user_id"],
+    "enable_logging": false,
+    "enforce_auth_on_inference": false,
+    "allowed_origins": ["*"]
+  },
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "/app/data/config.db"
+    }
+  },
+  "vector_store": {
+    "enabled": true,
+    "type": "chromem",
+    "config": {
+      "path": "/app/data/chromem",
+      "compress": true
+    }
+  },
+  "plugins": [
+    {
+      "name": "telemetry",
+      "enabled": true,
+      "config": {}
+    },
+    {
+      "name": "semantic_cache",
+      "enabled": true,
+      "config": {
+        "provider": "openai",
+        "embedding_model": "mock-embedding",
+        "dimension": 8,
+        "threshold": 1,
+        "ttl": "24h",
+        "vector_store_namespace": "BifrostCacheReportDemo"
+      }
+    }
+  ]
+}

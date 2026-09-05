@@ -1,0 +1,98 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 40}, {"color": "green", "value": 70}]},
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "100 * sum(increase(bifrost_cache_hits_total[$__range])) / clamp_min(sum(increase(bifrost_upstream_requests_total[$__range])), 1)",
+          "instant": true,
+          "legendFormat": "overall",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Overall cache hit rate",
+      "type": "gauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "options": {"displayLabels": ["name", "percent"], "legend": {"displayMode": "table", "placement": "right", "showLegend": true}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "tooltip": {"hideZeros": false, "mode": "single", "sort": "none"}},
+      "targets": [
+        {"editorMode": "code", "expr": "sum by (cache_type) (increase(bifrost_cache_hits_total[$__range]))", "instant": true, "legendFormat": "{{cache_type}}", "range": false, "refId": "A"}
+      ],
+      "title": "Hits by cache type",
+      "type": "piechart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [
+        {"editorMode": "code", "expr": "sum(increase(bifrost_upstream_requests_total[$__range]))", "instant": true, "legendFormat": "requests", "range": false, "refId": "A"},
+        {"editorMode": "code", "expr": "sum(increase(bifrost_cache_hits_total[$__range]))", "instant": true, "legendFormat": "hits", "range": false, "refId": "B"}
+      ],
+      "title": "Requests and hits",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "decimals": 2, "max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 8},
+      "id": 4,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true}, "orientation": "horizontal", "showValue": "always", "stacking": "none", "tooltip": {"hideZeros": false, "mode": "single", "sort": "none"}, "xField": "Time"},
+      "targets": [
+        {"editorMode": "code", "expr": "100 * sum by (user_id) (increase(bifrost_cache_hits_total[$__range])) / clamp_min(sum by (user_id) (increase(bifrost_upstream_requests_total[$__range])), 1)", "instant": true, "legendFormat": "{{user_id}}", "range": false, "refId": "A"}
+      ],
+      "title": "Cache hit rate by user",
+      "type": "barchart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "spanNulls": true}, "decimals": 2, "max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 8},
+      "id": 5,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"editorMode": "code", "expr": "100 * sum(rate(bifrost_cache_hits_total[5m])) / clamp_min(sum(rate(bifrost_upstream_requests_total[5m])), 0.000001)", "legendFormat": "overall", "range": true, "refId": "A"}
+      ],
+      "title": "Cache hit rate over time",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": ["bifrost", "cache"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Bifrost cache hit reporting",
+  "uid": "bifrost-cache-reporting",
+  "version": 1
+}

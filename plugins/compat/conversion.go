@@ -210,6 +210,12 @@ func restoreNamespacedMessage(message *schemas.ResponsesMessage, codec *namespac
 	if message == nil || message.ResponsesToolMessage == nil || message.ResponsesToolMessage.Name == nil || codec == nil {
 		return
 	}
+	// Both the LLM post-hook and HTTP stream hook can see the same item.
+	// An explicit namespace already identifies a caller-facing tool; never
+	// reinterpret its child name as another provider-visible alias.
+	if message.ResponsesToolMessage.Namespace != nil {
+		return
+	}
 	mapped, ok := codec.byFlat[*message.ResponsesToolMessage.Name]
 	if !ok {
 		return

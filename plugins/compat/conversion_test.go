@@ -174,3 +174,30 @@ func TestRestoreNamespacedStreamResponse(t *testing.T) {
 		t.Fatalf("restored stream namespace = %q", got)
 	}
 }
+
+func TestStreamingRestorationIsIdempotent(t *testing.T) {
+	req := &schemas.BifrostResponsesRequest{Provider: schemas.OpenRouter, Params: &schemas.ResponsesParameters{Tools: []schemas.ResponsesTool{
+		{Type: schemas.ResponsesToolTypeNamespace, Name: schemas.Ptr("A"), ResponsesToolNamespace: &schemas.ResponsesToolNamespace{Tools: []schemas.ResponsesTool{{Type: schemas.ResponsesToolTypeFunction, Name: schemas.Ptr("B__tool")}}}},
+		{Type: schemas.ResponsesToolTypeNamespace, Name: schemas.Ptr("B"), ResponsesToolNamespace: &schemas.ResponsesToolNamespace{Tools: []schemas.ResponsesTool{{Type: schemas.ResponsesToolTypeFunction, Name: schemas.Ptr("tool")}}}},
+	}}}
+	codec, err := flattenNamespaceTools(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := schemas.NewBifrostContextWithCancel(t.Context())
+	defer cancel()
+	ctx.SetValue(namespaceToolCodecContextKey{}, codec)
+	p := &CompatPlugin{}
+	stream := &schemas.BifrostResponsesStreamResponse{Item: &schemas.ResponsesMessage{ResponsesToolMessage: &schemas.ResponsesToolMessage{Name: schemas.Ptr("A__B__tool")}}}
+	_, _, err = p.PostLLMHook(ctx, &schemas.BifrostResponse{ResponsesStreamResponse: stream}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.HTTPTransportStreamChunkHook(ctx, nil, &schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: stream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *stream.Item.Namespace != "A" || *stream.Item.Name != "B__tool" {
+		t.Fatalf("restored tool identity changed to %s / %s; want A / B__tool", *stream.Item.Namespace, *stream.Item.Name)
+	}
+}

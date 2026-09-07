@@ -30,7 +30,10 @@ func TestFlattenAndRestoreNamespaceTools(t *testing.T) {
 		}},
 	}
 
-	codec := flattenNamespaceTools(req)
+	codec, err := flattenNamespaceTools(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	flatName := "mcp__bifrost__exa-web_search_exa"
 	if codec == nil || len(codec.byFlat) != 1 {
 		t.Fatalf("expected one namespace mapping, got %#v", codec)
@@ -68,7 +71,7 @@ func TestFlattenNamespaceToolsPreservesNativeOpenAI(t *testing.T) {
 		}}},
 	}
 
-	if codec := flattenNamespaceTools(req); codec != nil {
+	if codec, err := flattenNamespaceTools(req); err != nil || codec != nil {
 		t.Fatalf("expected no codec for OpenAI, got %#v", codec)
 	}
 	if req.Params.Tools[0].Type != schemas.ResponsesToolTypeNamespace {
@@ -95,7 +98,10 @@ func TestFlattenNamespaceToolsUsesCollisionSafeAlias(t *testing.T) {
 		}},
 	}
 
-	codec := flattenNamespaceTools(req)
+	codec, err := flattenNamespaceTools(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(req.Params.Tools) != 2 {
 		t.Fatalf("expected the native and flattened tools, got %d", len(req.Params.Tools))
 	}
@@ -110,7 +116,6 @@ func TestFlattenNamespaceToolsUsesCollisionSafeAlias(t *testing.T) {
 func TestFlattenNamespaceToolsCompactsLongNamesAndToolChoice(t *testing.T) {
 	namespace := "mcp__a_very_long_server_name_that_exceeds_the_portable_limit"
 	toolName := "a_very_long_tool_name_that_also_exceeds_the_limit"
-	canonical := namespace + namespaceToolSeparator + toolName
 	choiceType := schemas.ResponsesToolChoiceTypeFunction
 	req := &schemas.BifrostResponsesRequest{
 		Provider: schemas.OpenRouter,
@@ -124,13 +129,17 @@ func TestFlattenNamespaceToolsCompactsLongNamesAndToolChoice(t *testing.T) {
 				}}},
 			}},
 			ToolChoice: &schemas.ResponsesToolChoice{ResponsesToolChoiceStruct: &schemas.ResponsesToolChoiceStruct{
-				Type: choiceType,
-				Name: &canonical,
+				Type:      choiceType,
+				Name:      &toolName,
+				Namespace: &namespace,
 			}},
 		},
 	}
 
-	codec := flattenNamespaceTools(req)
+	codec, err := flattenNamespaceTools(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	flatName := *req.Params.Tools[0].Name
 	if len(flatName) > maxProviderFunctionNameLen || flatName[:len(compactNamespaceNamePrefix)] != compactNamespaceNamePrefix {
 		t.Fatalf("long tool was not compacted safely: %q", flatName)

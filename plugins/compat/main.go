@@ -168,7 +168,16 @@ func (p *CompatPlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.Bifr
 	}
 
 	if (shouldConvertParamsOverride && shouldConvertParamsOverrideEnabled) || p.config.ShouldConvertParams {
-		if codec := applyParameterConversion(modifiedReq); codec != nil {
+		codec, err := applyParameterConversion(modifiedReq)
+		if err != nil {
+			return req, &schemas.LLMPluginShortCircuit{Error: &schemas.BifrostError{
+				IsBifrostError: true,
+				StatusCode:     schemas.Ptr(400),
+				AllowFallbacks: schemas.Ptr(false),
+				Error:          &schemas.ErrorField{Type: schemas.Ptr("invalid_request_error"), Param: "tool_choice", Message: err.Error()},
+			}}, nil
+		}
+		if codec != nil {
 			ctx.SetValue(namespaceToolCodecContextKey{}, codec)
 		}
 	}

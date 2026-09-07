@@ -2571,6 +2571,7 @@ const (
 
 // ResponsesToolChoiceStruct represents a tool choice struct
 type ResponsesToolChoiceStruct struct {
+	Namespace   *string                             `json:"namespace,omitempty"`    // Explicit namespace of a selected function tool
 	Type        ResponsesToolChoiceType             `json:"type"`                   // Type of tool choice
 	Mode        *string                             `json:"mode,omitempty"`         //"none" | "auto" | "required"
 	Name        *string                             `json:"name,omitempty"`         // Common name field for function/MCP/custom tools
@@ -2641,6 +2642,7 @@ func (tc *ResponsesToolChoice) UnmarshalJSON(data []byte) error {
 
 // ResponsesToolChoiceAllowedToolDef represents a tool choice allowed tool definition
 type ResponsesToolChoiceAllowedToolDef struct {
+	Namespace   *string `json:"namespace,omitempty"`    // Explicit namespace of a selected function tool
 	Type        string  `json:"type"`                   // "function" | "mcp" | "image_generation"
 	Name        *string `json:"name,omitempty"`         // for function tools
 	ServerLabel *string `json:"server_label,omitempty"` // for MCP tools

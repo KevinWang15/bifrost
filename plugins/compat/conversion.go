@@ -3,6 +3,7 @@ package compat
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/maximhq/bifrost/core/schemas"
 )
@@ -22,9 +23,8 @@ type namespaceToolID struct {
 // It deliberately lives in request context: provider-visible aliases can be
 // shortened or disambiguated, so parsing a flat name by delimiter is unsafe.
 type namespaceToolCodec struct {
-	byFlat      map[string]namespaceToolID
-	byLogical   map[namespaceToolID]string
-	byCanonical map[string]string
+	byFlat    map[string]namespaceToolID
+	byLogical map[namespaceToolID]string
 }
 
 type namespaceToolCodecContextKey struct{}
@@ -44,9 +44,9 @@ func providerSupportsNamespaceTools(provider schemas.ModelProvider, model string
 }
 
 // applyParameterConversion rewrites request fields in place for provider compatibility.
-func applyParameterConversion(req *schemas.BifrostRequest) *namespaceToolCodec {
+func applyParameterConversion(req *schemas.BifrostRequest) (*namespaceToolCodec, error) {
 	if req == nil || req.ResponsesRequest == nil {
-		return nil
+		return nil, nil
 	}
 	return flattenNamespaceTools(req.ResponsesRequest)
 }
@@ -55,14 +55,14 @@ func applyParameterConversion(req *schemas.BifrostRequest) *namespaceToolCodec {
 // tools for Responses-compatible providers that do not implement OpenAI's
 // namespace extension. All model-visible references are rewritten through the
 // same request-local codec so responses and replayed history remain symmetric.
-func flattenNamespaceTools(req *schemas.BifrostResponsesRequest) *namespaceToolCodec {
+func flattenNamespaceTools(req *schemas.BifrostResponsesRequest) (*namespaceToolCodec, error) {
 	if req == nil || req.Params == nil || providerSupportsNamespaceTools(req.Provider, req.Model) {
-		return nil
+		return nil, nil
 	}
 
 	codec := newNamespaceToolCodec(req.Params.Tools)
 	if codec == nil {
-		return nil
+		return nil, flattenNamespacedToolChoice(req.Params.ToolChoice, nil)
 	}
 
 	flattened := make([]schemas.ResponsesTool, 0, len(req.Params.Tools)+len(codec.byFlat))
@@ -85,8 +85,10 @@ func flattenNamespaceTools(req *schemas.BifrostResponsesRequest) *namespaceToolC
 	}
 	req.Params.Tools = flattened
 	flattenNamespacedInput(req.Input, codec)
-	flattenNamespacedToolChoice(req.Params.ToolChoice, codec)
-	return codec
+	if err := flattenNamespacedToolChoice(req.Params.ToolChoice, codec); err != nil {
+		return nil, err
+	}
+	return codec, nil
 }
 
 func newNamespaceToolCodec(tools []schemas.ResponsesTool) *namespaceToolCodec {
@@ -98,9 +100,8 @@ func newNamespaceToolCodec(tools []schemas.ResponsesTool) *namespaceToolCodec {
 	}
 
 	codec := &namespaceToolCodec{
-		byFlat:      make(map[string]namespaceToolID),
-		byLogical:   make(map[namespaceToolID]string),
-		byCanonical: make(map[string]string),
+		byFlat:    make(map[string]namespaceToolID),
+		byLogical: make(map[namespaceToolID]string),
 	}
 	for _, namespaceTool := range tools {
 		if namespaceTool.Type != schemas.ResponsesToolTypeNamespace ||
@@ -113,27 +114,29 @@ func newNamespaceToolCodec(tools []schemas.ResponsesTool) *namespaceToolCodec {
 				continue
 			}
 			id := namespaceToolID{namespace: *namespaceTool.Name, name: *nested.Name}
-			canonical := id.namespace + namespaceToolSeparator + id.name
-			flatName := canonical
+			if _, exists := codec.byLogical[id]; exists {
+				continue
+			}
+			flatName := id.namespace + namespaceToolSeparator + id.name
 			if len(flatName) > maxProviderFunctionNameLen {
 				flatName = compactNamespaceToolName(id)
 			}
-			if _, collision := used[flatName]; collision {
-				flatName = compactNamespaceToolName(id)
-			}
-			// A SHA-256-derived alias collision is not realistically reachable, but
-			// fail closed rather than silently routing a call to the wrong tool.
-			if existing, collision := codec.byFlat[flatName]; collision && existing != id {
-				continue
+			// Reserve against ordinary functions as well as namespace aliases.
+			// Every retry hashes the logical identity with a deterministic counter.
+			for attempt := 0; ; attempt++ {
+				if _, collision := used[flatName]; !collision {
+					break
+				}
+				if attempt == 0 {
+					flatName = compactNamespaceToolName(id)
+				} else {
+					digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", id.namespace, id.name, attempt)))
+					flatName = compactNamespaceNamePrefix + hex.EncodeToString(digest[:28])
+				}
 			}
 			used[flatName] = struct{}{}
 			codec.byFlat[flatName] = id
 			codec.byLogical[id] = flatName
-			if previous, exists := codec.byCanonical[canonical]; !exists || previous == flatName {
-				codec.byCanonical[canonical] = flatName
-			} else {
-				delete(codec.byCanonical, canonical)
-			}
 		}
 	}
 	if len(codec.byFlat) == 0 {
@@ -170,24 +173,37 @@ func flattenNamespacedInput(input []schemas.ResponsesMessage, codec *namespaceTo
 	}
 }
 
-func flattenNamespacedToolChoice(choice *schemas.ResponsesToolChoice, codec *namespaceToolCodec) {
-	if choice == nil || choice.ResponsesToolChoiceStruct == nil || codec == nil {
-		return
+// Only explicit namespace/name pairs select namespace children. An ordinary
+// function name must never be reinterpreted as a concatenated namespace alias.
+func flattenNamespacedToolChoice(choice *schemas.ResponsesToolChoice, codec *namespaceToolCodec) error {
+	if choice == nil || choice.ResponsesToolChoiceStruct == nil {
+		return nil
 	}
-	choiceStruct := choice.ResponsesToolChoiceStruct
-	if choiceStruct.Name != nil {
-		if flat, ok := codec.byCanonical[*choiceStruct.Name]; ok {
-			choiceStruct.Name = schemas.Ptr(flat)
+	rewrite := func(name, namespace **string) error {
+		if *namespace == nil {
+			return nil
+		}
+		if *name == nil || codec == nil {
+			return fmt.Errorf("namespace tool choice does not reference a declared tool")
+		}
+		flat, ok := codec.byLogical[namespaceToolID{namespace: **namespace, name: **name}]
+		if !ok {
+			return fmt.Errorf("unknown namespace tool choice %q / %q", **namespace, **name)
+		}
+		*name = schemas.Ptr(flat)
+		*namespace = nil
+		return nil
+	}
+	c := choice.ResponsesToolChoiceStruct
+	if err := rewrite(&c.Name, &c.Namespace); err != nil {
+		return err
+	}
+	for i := range c.Tools {
+		if err := rewrite(&c.Tools[i].Name, &c.Tools[i].Namespace); err != nil {
+			return err
 		}
 	}
-	for i := range choiceStruct.Tools {
-		if choiceStruct.Tools[i].Name == nil {
-			continue
-		}
-		if flat, ok := codec.byCanonical[*choiceStruct.Tools[i].Name]; ok {
-			choiceStruct.Tools[i].Name = schemas.Ptr(flat)
-		}
-	}
+	return nil
 }
 
 func restoreNamespacedMessage(message *schemas.ResponsesMessage, codec *namespaceToolCodec) {

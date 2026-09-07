@@ -940,3 +940,19 @@ func TestSessionIDResolutionIsConsistent(t *testing.T) {
 		}
 	}
 }
+
+func TestConvertToBifrostContextRecognizesCodexOnBothResponsesRoutes(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/openai/v1/responses"} {
+		t.Run(path, func(t *testing.T) {
+			ctx := &fasthttp.RequestCtx{}
+			ctx.Request.SetRequestURI(path)
+			ua := "codex_exec/0.153.4"
+			ctx.Request.Header.SetUserAgent(ua)
+			converted, cancel := ConvertToBifrostContext(ctx, testHandlerStore{})
+			defer cancel()
+			if got := converted.Value(schemas.BifrostContextKeyUserAgent); got != ua {
+				t.Fatalf("user agent = %v, want %s", got, ua)
+			}
+		})
+	}
+}

@@ -317,6 +317,10 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, store HandlerStore) (*sch
 		bifrostCtx.SetValue(key, value)
 	})
 
+	schemas.ExtractAndSetUserAgentFromHeaders(map[string][]string{
+		"User-Agent": {string(ctx.Request.Header.UserAgent())},
+	}, bifrostCtx)
+
 	// When a prepare*Request function resolved a provider via the model catalog,
 	// it stores the resolution info on the fasthttp context. Emit the routing
 	// engine log and mark the engine as used centrally here.

@@ -96,6 +96,11 @@ func TestShouldEmbedReasoningItemID(t *testing.T) {
 	}{
 		{"OpenAI is always true regardless of model", schemas.OpenAI, "gpt-5", "", true},
 		{"OpenAI is true even for an unusual model string", schemas.OpenAI, "some-future-model", "", true},
+		{"OpenRouter with an OpenAI model", schemas.OpenRouter, "openai/gpt-5-mini", "", true},
+		{"OpenRouter with an o-series model", schemas.OpenRouter, "openai/o3", "", true},
+		{"OpenRouter with Claude", schemas.OpenRouter, "anthropic/claude-haiku-4.5", "", false},
+		{"OpenRouter with DeepSeek", schemas.OpenRouter, "deepseek/deepseek-v3.2", "", false},
+		{"custom provider on base OpenRouter", "my-router", "openai/gpt-5-mini", schemas.OpenRouter, true},
 		{"Azure with an OpenAI model", schemas.Azure, "o3", "", true},
 		{"Azure with a non-OpenAI Foundry model", schemas.Azure, "Meta-Llama-3.1-70B-Instruct", "", false},
 		{"Azure with Mistral", schemas.Azure, "mistral-large", "", false},

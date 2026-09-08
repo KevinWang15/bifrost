@@ -130,11 +130,11 @@ const ReasoningItemIDSeparator = ":"
 // ShouldEmbedReasoningItemID reports whether provider/model represents a genuine
 // OpenAI-issued reasoning response that needs EmbedReasoningItemID's id-smuggling
 // treatment. True unconditionally only for the literal OpenAI provider, which by
-// definition only ever serves OpenAI models. Azure, Bedrock Mantle, and Vertex
+// definition only ever serves OpenAI models. Azure, Bedrock Mantle, Vertex, and OpenRouter
 // each also route real OpenAI models (Azure AI Foundry, Bedrock Mantle, and
 // Vertex Model Garden all host OpenAI's gpt-oss alongside third-party model
 // families -- Llama/Mistral/DeepSeek on Azure, Claude on Bedrock Mantle,
-// Gemini/Claude on Vertex), so for all three the check additionally requires the
+// Gemini/Claude on Vertex, Claude/DeepSeek on OpenRouter), so their checks require the
 // resolved model itself to be OpenAI-family -- stamping a Bifrost-synthetic id
 // onto a non-OpenAI reasoning item's signature/data would mark data that never
 // needed it and was never bound to any id in the first place.
@@ -150,7 +150,7 @@ func ShouldEmbedReasoningItemID(ctx *schemas.BifrostContext, provider schemas.Mo
 	switch schemas.ResolveBaseProvider(ctx, provider) {
 	case schemas.OpenAI:
 		return true
-	case schemas.Azure, schemas.BedrockMantle, schemas.Vertex:
+	case schemas.Azure, schemas.BedrockMantle, schemas.Vertex, schemas.OpenRouter:
 		return schemas.IsOpenAIModel(model)
 	default:
 		return false

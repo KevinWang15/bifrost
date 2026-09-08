@@ -188,6 +188,11 @@ func TestConvertBifrostReasoning_BothSummaryAndEncryptedContentEmitBothBlocks(t 
 // the final id is a freshly minted random string while encrypted_content stays
 // bound to the original id -- exactly the mismatch OpenAI rejects.
 func TestBifrostAnthropicToOpenAI_RedactedThinkingReplayPreservesID(t *testing.T) {
+	t.Run("OpenAI", func(t *testing.T) { testReasoningReplayPreservesID(t, schemas.OpenAI, "gpt-5") })
+	t.Run("OpenRouter", func(t *testing.T) { testReasoningReplayPreservesID(t, schemas.OpenRouter, "openai/gpt-5-mini") })
+}
+
+func testReasoningReplayPreservesID(t *testing.T, provider schemas.ModelProvider, model string) {
 	const originalID = "rs_ORIGINAL123"
 	const ciphertext = "CIPHERTEXT_BOUND_TO_rs_ORIGINAL123"
 
@@ -202,7 +207,7 @@ func TestBifrostAnthropicToOpenAI_RedactedThinkingReplayPreservesID(t *testing.T
 	}
 
 	// 2. Egress: convert to the Anthropic block Claude Code receives.
-	blocks := convertBifrostReasoningToAnthropicThinking(schemas.NewBifrostContext(nil, schemas.NoDeadline), original, schemas.OpenAI, "gpt-5")
+	blocks := convertBifrostReasoningToAnthropicThinking(schemas.NewBifrostContext(nil, schemas.NoDeadline), original, provider, model)
 	if len(blocks) != 1 || blocks[0].Type != AnthropicContentBlockTypeRedactedThinking {
 		t.Fatalf("expected 1 redacted_thinking block, got %+v", blocks)
 	}
@@ -217,8 +222,9 @@ func TestBifrostAnthropicToOpenAI_RedactedThinkingReplayPreservesID(t *testing.T
 
 	// 4. Convert onward to the actual OpenAI wire request.
 	bifrostReq := &schemas.BifrostResponsesRequest{
-		Model: "gpt-5.1",
-		Input: bifrostMessages,
+		Provider: provider,
+		Model:    model,
+		Input:    bifrostMessages,
 	}
 	openaiReq := openai.ToOpenAIResponsesRequest(ctx, bifrostReq)
 	if openaiReq == nil {
@@ -323,5 +329,40 @@ func TestConvertAnthropicContentBlocksGrouped_ThinkingAndRedactedThinkingMergeIn
 	}
 	if msg.ResponsesReasoning == nil || msg.ResponsesReasoning.EncryptedContent == nil || *msg.ResponsesReasoning.EncryptedContent != ciphertext {
 		t.Errorf("encrypted_content missing or wrong, got %v", msg.ResponsesReasoning)
+	}
+}
+
+// The streamed path feeds Claude Code's next tool-result turn, and must preserve
+// the OpenAI-issued id even when the upstream transport is OpenRouter.
+func TestOpenRouterStreamReasoningReplayPreservesID(t *testing.T) {
+	const id = "rs_openrouter_original"
+	const ciphertext = "opaque-content-bound-to-original-id"
+	ctx := schemas.NewBifrostContext(nil, schemas.NoDeadline)
+	frame := &schemas.BifrostResponsesStreamResponse{
+		Type:        schemas.ResponsesStreamResponseTypeOutputItemAdded,
+		OutputIndex: schemas.Ptr(0),
+		Item: &schemas.ResponsesMessage{
+			ID: schemas.Ptr(id), Type: schemas.Ptr(schemas.ResponsesMessageTypeReasoning),
+			ResponsesReasoning: &schemas.ResponsesReasoning{EncryptedContent: schemas.Ptr(ciphertext), Summary: []schemas.ResponsesReasoningSummary{}},
+		},
+	}
+	frame.ExtraFields.RoutingInfo.Provider = schemas.OpenRouter
+	frame.ExtraFields.RoutingInfo.Model = "openai/gpt-5-mini"
+	var blocks []AnthropicContentBlock
+	for _, event := range ToAnthropicResponsesStreamResponse(ctx, frame) {
+		if event.ContentBlock != nil {
+			blocks = append(blocks, *event.ContentBlock)
+		}
+	}
+	if len(blocks) != 1 || blocks[0].Type != AnthropicContentBlockTypeRedactedThinking {
+		t.Fatalf("missing redacted reasoning block: %+v", blocks)
+	}
+	echoed := ConvertAnthropicMessagesToBifrostMessages(schemas.NewBifrostContext(nil, schemas.NoDeadline), []AnthropicMessage{{Role: AnthropicMessageRoleAssistant, Content: AnthropicContent{ContentBlocks: blocks}}}, nil, false, false)
+	reasoning := findReasoningMessage(t, echoed)
+	if reasoning.ID == nil || *reasoning.ID != id {
+		t.Fatalf("reasoning id changed on client replay: %v", reasoning.ID)
+	}
+	if reasoning.ResponsesReasoning == nil || reasoning.ResponsesReasoning.EncryptedContent == nil || *reasoning.ResponsesReasoning.EncryptedContent != ciphertext {
+		t.Fatal("encrypted reasoning payload changed on replay")
 	}
 }

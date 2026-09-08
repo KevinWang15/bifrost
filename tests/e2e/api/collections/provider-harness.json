@@ -137066,6 +137066,165 @@
           }
         }
       ]
+    },
+    {
+      "name": "Internal: OpenRouter OpenAI Encrypted Reasoning Replay",
+      "description": "Bifrost 2.0 regression: Claude Code through OpenRouter OpenAI loses the real reasoning item ID on Anthropic-surface replay. Capture encrypted reasoning and replay it unchanged; the continuation must succeed without invalid_encrypted_content. Native OpenAI coverage remains in folder 38.",
+      "item": [
+        {
+          "name": "openrouter/openai/gpt-5-mini /anthropic/v1/messages streaming carries encrypted reasoning as redacted_thinking block - OpenRouter reasoning replay",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504, 529].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Streaming reasoning carries a thinking/redacted_thinking content block - OpenRouter reasoning replay', function () {",
+                  "  pm.expect(pm.response.code, 'stream request failed: ' + pm.response.text()).to.be.below(400);",
+                  "  var body = pm.response.text() || '';",
+                  "  pm.expect(body, 'expected SSE frames').to.include('data:');",
+                  "  pm.expect(body, 'expected a thinking or redacted_thinking content block').to.match(/\"type\":\\s*\"(redacted_)?thinking\"/);",
+                  "  pm.expect(body, 'expected the stream to complete').to.include('message_stop');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"openrouter/openai/gpt-5-mini\",\"max_tokens\":4096,\"stream\":true,\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":2048},\"include\":[\"reasoning.encrypted_content\"],\"messages\":[{\"role\":\"user\",\"content\":\"Think hard: which two of Alpha, Beta, Gamma, Delta are adjacent Greek letters whose English spellings share no vowels? Just name them.\"}]}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/anthropic/v1/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "anthropic",
+                "v1",
+                "messages"
+              ]
+            }
+          }
+        },
+        {
+          "name": "openrouter/openai/gpt-5-mini /anthropic/v1/messages non-streaming preserves encrypted reasoning + captures replay content - OpenRouter reasoning replay",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504, 529].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Non-streaming response succeeds and returns content - OpenRouter reasoning replay', function () {",
+                  "  pm.expect(pm.response.code, 'request failed: ' + pm.response.text()).to.be.below(400);",
+                  "  var j = pm.response.json();",
+                  "  pm.expect(j.content, 'expected content array').to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "pm.test('Non-streaming response carries encrypted reasoning as redacted_thinking - OpenRouter reasoning replay', function () {",
+                  "  var content = pm.response.json().content || [];",
+                  "  var redacted = content.filter(function (c) { return c.type === 'redacted_thinking' && c.data; });",
+                  "  pm.expect(redacted, 'expected a redacted_thinking block with non-empty data, got: ' + JSON.stringify(content.map(function (c) { return c.type; }))).to.not.be.empty;",
+                  "});",
+                  "// Capture the replay content for the next request only when a redacted_thinking",
+                  "// block with non-empty data is actually present, so the replay case skips",
+                  "// instead of false-failing when the model didn't produce encrypted content.",
+                  "pm.collectionVariables.unset('internalOpenRouterReasoningReplayContent');",
+                  "try {",
+                  "  var body = pm.response.json();",
+                  "  var redacted = (body.content || []).filter(function (c) { return c.type === 'redacted_thinking' && c.data; });",
+                  "  if (redacted.length) {",
+                  "    pm.collectionVariables.set('internalOpenRouterReasoningReplayContent', JSON.stringify(body.content));",
+                  "  }",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"openrouter/openai/gpt-5-mini\",\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":2048},\"include\":[\"reasoning.encrypted_content\"],\"messages\":[{\"role\":\"user\",\"content\":\"Think hard: which two of Alpha, Beta, Gamma, Delta are adjacent Greek letters whose English spellings share no vowels? Just name them.\"}]}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/anthropic/v1/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "anthropic",
+                "v1",
+                "messages"
+              ]
+            }
+          }
+        },
+        {
+          "name": "openrouter/openai/gpt-5-mini /anthropic/v1/messages replay of encrypted reasoning accepted (no item_id mismatch) - OpenRouter reasoning replay",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Skip when the capture step did not run or found no redacted_thinking block:",
+                  "// the body placeholder stays unresolved, so there is nothing to replay.",
+                  "if (pm.request.body && pm.request.body.raw && pm.request.body.raw.indexOf('{{') !== -1) { return; }",
+                  "if ([401, 403, 429, 500, 502, 503, 504, 529].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Replayed encrypted reasoning accepted without item_id mismatch - OpenRouter reasoning replay', function () {",
+                  "  var body = pm.response.text() || '';",
+                  "  pm.expect(body, 'OpenAI rejected the replayed reasoning item (regression of OpenRouter reasoning replay)').to.not.include('did not match the target item id');",
+                  "  pm.expect(body, 'OpenAI rejected the replayed reasoning item (regression of OpenRouter reasoning replay)').to.not.include('could not be verified');",
+                  "  pm.expect(pm.response.code, 'replay request failed: ' + body).to.be.below(400);",
+                  "  var j = pm.response.json();",
+                  "  pm.expect(j.content, 'expected content array').to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"openrouter/openai/gpt-5-mini\",\"max_tokens\":4096,\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":2048},\"include\":[\"reasoning.encrypted_content\"],\"messages\":[{\"role\":\"user\",\"content\":\"Think hard: which two of Alpha, Beta, Gamma, Delta are adjacent Greek letters whose English spellings share no vowels? Just name them.\"},{\"role\":\"assistant\",\"content\":{{internalOpenRouterReasoningReplayContent}}},{\"role\":\"user\",\"content\":\"Good. Now say which pair of the two you didn't pick and give one reason it doesn't qualify.\"}]}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/anthropic/v1/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "anthropic",
+                "v1",
+                "messages"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

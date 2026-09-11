@@ -1,0 +1,127 @@
+---
+title: "Session Routing & Outage Recovery"
+description: "Keep conversations on a stable model route and temporarily bypass failed upstream routes in Bifrost OSS."
+icon: "route"
+---
+
+Bifrost OSS can preserve a session's provider/model choice and remember upstream
+outages across requests. Both features are opt-in. Configure them in the root
+`routing_resilience` block of `config.json`, then restart Bifrost:
+
+```json
+{
+  "routing_resilience": {
+    "session_stickiness": true,
+    "outage_detection": true,
+    "session_ttl_seconds": 3600,
+    "failure_threshold": 3,
+    "cooldown_seconds": 600,
+    "probe_interval_seconds": 30,
+    "probe_timeout_seconds": 10
+  }
+}
+```
+
+These are startup settings, not live dashboard controls. They are read from the
+file on each start and are not stored in the configuration database. In the Go
+SDK, pass `RoutingResilience: &schemas.RoutingResilienceConfig{...}` and a `KVStore`
+to `Init`. A nil KV store disables session affinity, as with API-key stickiness;
+outage detection can still operate. The HTTP server supplies its existing KV store.
+
+## Session routing
+
+For a new session, weighted routing chooses a provider/model target. Subsequent
+requests reuse that target while it remains an eligible candidate. This applies
+to weighted routing rules and governance provider balancing, including
+cross-model targets. Rules and governance checks still run on every request:
+removing a target or revoking access cannot be bypassed by a session binding.
+Chain rules continue to evaluate on each request, with a separate binding for each
+matching rule.
+
+With this policy enabled, a rule without an explicit fallback list also
+uses its other positive-weight, unpinned provider/model targets as fallbacks.
+An explicit fallback list retains precedence. Successful fallback updates the
+session's destination. Recovery of the original provider does not move an
+established session back. Explicit provider/model requests with fallback lists
+also retain a successful fallback destination for the session.
+
+Bifrost uses `x-bf-session-id`, or supported Claude Code, Codex CLI and OpenCode
+headers when no explicit ID is supplied. See [Session Stickiness](/providers/request-options#session-stickiness-session-id).
+Provider/model bindings are separated by caller identity, incoming model, API
+family and routing scope. Chat streaming and non-streaming share a binding;
+Responses uses a separate API family. Bindings expire after the configured
+inactivity TTL, using the same KV store as API-key stickiness with a separate
+`routing:session:` namespace. The existing `x-bf-session-ttl` override takes precedence
+over `session_ttl_seconds`; the default is one hour. Storage expiry and capacity
+follow the configured KV backend, without a separate routing session cache.
+
+Existing API key stickiness continues to work within the selected target. This
+policy improves prompt-cache locality; actual hits still depend on the provider,
+prompt prefix and cache lifetime. Weight ratios govern new session allocations,
+so request counts need not exactly match those ratios.
+
+## Outages and recovery
+
+Health is tracked per configured provider/model and API family, across sessions.
+An upstream call that still fails after its retries contributes one failure.
+Upstream HTTP 5xx and recognized network errors count toward the threshold.
+Successful calls reset the count. User cancellation, local governance rejection,
+request errors and credential/account 4xx errors, including 429, do not quarantine
+an entire model route. Credential rotation remains the existing retry mechanism.
+
+Once the threshold is reached, subsequent requests skip that route. This gate
+also applies to explicit primaries and fallback attempts. If every configured
+route is unavailable, Bifrost returns HTTP 503 with `route_unavailable` rather
+than repeatedly calling them during cooldown. Startup stream errors participate
+in retry/fallback; later stream errors update health for future requests while
+remaining errors in the current stream. Already delivered output is not replayed.
+
+During cooldown, a background worker sends a small synthetic inference request
+using the same provider/model and API family. A successful probe restores the
+route before cooldown expires. If cooldown expires first, only one business
+request can test the route while it is half-open. Failed probes extend cooldown.
+The worker has at most four concurrent probes, and probes are canceled on shutdown.
+Under a large outage, the configured interval is a minimum, not an exact schedule.
+
+Probes use operator-configured provider credentials, a fixed prompt and a 16-token
+output budget. They bypass user plugins, routing, retries and fallbacks, so a
+backup cannot falsely prove recovery. They never replay user prompts, tools or
+caller headers. **They are real provider calls and can incur charges**, but are
+not attributed to a user virtual key or included in normal user-request budget
+accounting. Probe outcomes appear in server logs; skipped routes and reused
+session targets appear in routing logs.
+
+## Scope
+
+- Session bindings follow the injected KV store's lifetime and sharing semantics.
+  The OSS HTTP server's default KV store is in-memory and local to one process;
+  restarting it clears bindings. A shared backend can share bindings between
+  instances. Atomic first writes use `SetNXWithTTL`; fallback updates follow the
+  existing KV interface's last-write behavior, not distributed transactions.
+- Outage state and probe ownership remain **local to one Bifrost process**.
+  Replicas do not coordinate health or probes.
+- Applies to normalized Chat Completions and Responses requests through the core
+  request pipeline, including SSE and the Responses WebSocket-to-HTTP bridge.
+  Native upstream WebSocket/realtime connections do not gain transparent failover.
+- Direct-key/OAuth credential passthrough is excluded. Arbitrary raw-body and
+  large-payload passthrough do not gain cross-protocol replay guarantees.
+- Outages are not tracked per key or region. If two independently failing
+  deployments need separate health state, configure separate provider names.
+- At most 10,000 route health entries are retained. Beyond that bound, untracked
+  routes use the ordinary retry/fallback behavior. Idle entries expire after
+  the larger of one hour or twice the cooldown, so removed routes stop probing.
+- These features do not migrate provider-owned response IDs, files, containers or
+  conversation state, and do not make tool side effects idempotent.
+
+## Local verification
+
+The repository includes an isolated fake-upstream stack:
+
+```bash
+./tests/routingresilience/run.sh
+```
+
+It builds the local OSS gateway, configures two OpenAI-compatible fake providers
+with different model names, and checks session stability, simulated cache reuse,
+outage skipping, early recovery, SSE routing and all-down behavior. It makes no
+paid LLM calls. See `tests/routingresilience/README.md` for details.

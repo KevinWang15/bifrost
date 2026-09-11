@@ -165,6 +165,7 @@ type ServerConfig struct {
 // It contains the client configuration, provider configurations, MCP configuration,
 // vector store configuration, config store configuration, and logs store configuration.
 type ConfigData struct {
+	RoutingResilience *schemas.RoutingResilienceConfig `json:"routing_resilience,omitempty"`
 	// Version controls how empty arrays in allow-list fields are interpreted when loading
 	// from config.json. Omitting this field or setting it to 2 uses v1.5.0+ semantics:
 	// empty = deny all, ["*"] = allow all. Setting it to 1 restores v1.4.x semantics:
@@ -442,6 +443,7 @@ func (cd *ConfigData) UnmarshalJSON(data []byte) error {
 
 	// First, unmarshal into a temporary struct to get all fields except the complex configs
 	type TempConfigData struct {
+		RoutingResilience *schemas.RoutingResilienceConfig      `json:"routing_resilience,omitempty"`
 		Version           int                                   `json:"version,omitempty"`
 		EnvLabel          string                                `json:"env_label,omitempty"`
 		SourceOfTruth     string                                `json:"source_of_truth,omitempty"`
@@ -470,6 +472,7 @@ func (cd *ConfigData) UnmarshalJSON(data []byte) error {
 	}
 
 	// Set simple fields
+	cd.RoutingResilience = temp.RoutingResilience
 	cd.Version = temp.Version
 	cd.EnvLabel = temp.EnvLabel
 	cd.SourceOfTruth = normalizeSourceOfTruth(temp.SourceOfTruth)
@@ -561,10 +564,11 @@ func (cd *ConfigData) UnmarshalJSON(data []byte) error {
 //   - Support for provider-specific key configurations (Azure, Vertex, Bedrock)
 //   - Lock-free plugin reads via atomic.Pointer for minimal hot-path latency
 type Config struct {
-	Mu         sync.RWMutex // Exported for direct access from handlers (governance plugin)
-	muMCP      sync.RWMutex
-	muWebhooks sync.RWMutex
-	client     *bifrost.Bifrost
+	RoutingResilience *schemas.RoutingResilienceConfig
+	Mu                sync.RWMutex // Exported for direct access from handlers (governance plugin)
+	muMCP             sync.RWMutex
+	muWebhooks        sync.RWMutex
+	client            *bifrost.Bifrost
 
 	configPath string
 
@@ -961,6 +965,13 @@ func LoadConfig(ctx context.Context, configDirPath string) (*Config, error) {
 		}
 	}
 
+	if configData.RoutingResilience != nil {
+		normalized, err := configData.RoutingResilience.WithDefaults()
+		if err != nil {
+			return nil, err
+		}
+		config.RoutingResilience = &normalized
+	}
 	// 1. Encryption (before stores so BeforeSave hooks work correctly)
 	if err := initEncryption(&configData); err != nil {
 		return nil, err

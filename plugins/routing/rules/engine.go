@@ -2,13 +2,13 @@ package rules
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/maximhq/bifrost/core/routingstrategy"
 	"github.com/maximhq/bifrost/core/schemas"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/routing"
@@ -262,38 +262,48 @@ func (re *Engine) EvaluateRoutingRules(ctx *schemas.BifrostContext, routingCtx *
 					continue
 				}
 
-				target, ok := selectWeightedTarget(rule.Targets)
+				options := routingTargets(rule.Targets, currentProvider, currentModel)
+				if schemas.RoutingSelectorFromContext(ctx) != nil {
+					for _, f := range rule.ParsedFallbacks {
+						p, m := schemas.ParseModelString(f, "")
+						if m == "" {
+							m = currentModel
+						}
+						if p != "" {
+							options = append(options, schemas.RoutingTarget{Provider: p, Model: m, FallbackOnly: true})
+						}
+					}
+				}
+				selected, ok := routingstrategy.Select(ctx, "rule:"+rule.ID, options)
+				if !ok && schemas.RoutingSelectorFromContext(ctx) != nil && len(options) > 0 {
+					// Do not fall through to an unrelated rule when all its routes are down.
+					selected, ok = options[0], true
+				}
 				if !ok {
 					re.logger.Debug("[Engine] Rule %s matched but has no valid targets (empty list or all-negative weights), skipping — note: all-zero weights use uniform selection and would not reach here", rule.Name)
 					ctx.AppendRoutingEngineLog(schemas.RoutingEngineRoutingRule, schemas.LogLevelError, fmt.Sprintf("Rule '%s' [%s] → matched but no valid targets (empty or all-negative weights), skipping", rule.Name, rule.CelExpression))
 					continue
 				}
 
-				provider := string(currentProvider)
-				if target.Provider != nil && *target.Provider != "" {
-					provider = *target.Provider
-				}
-
-				model := currentModel
-				if target.Model != nil && *target.Model != "" {
-					model = *target.Model
-				}
-
-				keyID := ""
-				if target.KeyID != nil {
-					keyID = *target.KeyID
-				}
+				provider, model, keyID := string(selected.Provider), selected.Model, selected.KeyID
 
 				stepDecision = &Decision{
 					Provider:        provider,
 					Model:           model,
 					KeyID:           keyID,
-					Fallbacks:       rule.ParsedFallbacks,
+					Fallbacks:       append([]string(nil), rule.ParsedFallbacks...),
 					MatchedRuleID:   rule.ID,
 					MatchedRuleName: rule.Name,
 				}
+				if schemas.RoutingSelectorFromContext(ctx) != nil && (len(stepDecision.Fallbacks) == 0 || selected.FallbackOnly) {
+					for _, t := range options {
+						if !t.FallbackOnly && t.Provider != "" && t.Weight > 0 && (string(t.Provider) != provider || t.Model != model) && t.KeyID == "" {
+							stepDecision.Fallbacks = append(stepDecision.Fallbacks, string(t.Provider)+"/"+t.Model)
+						}
+					}
+				}
 				matchedRule = rule
-				matchedTargetWeight = target.Weight
+				matchedTargetWeight = selected.Weight
 				break outerLoop
 			}
 		}
@@ -334,53 +344,25 @@ func (re *Engine) EvaluateRoutingRules(ctx *schemas.BifrostContext, routingCtx *
 	return finalDecision, nil
 }
 
-// selectWeightedTarget picks one target from the slice using weighted random selection.
-// Each target's Weight contributes proportionally to its probability of being chosen.
-// Weights do not need to be normalised to 100; the function normalises internally.
-// Returns ok=false only when len(targets)==0 or all targets have negative weights (filtered out).
-// When all valid targets have weight==0 the function falls back to uniform random selection
-// and still returns ok=true, so zero-weight targets are valid and handled.
-func selectWeightedTarget(targets []configstoreTables.TableRoutingTarget) (configstoreTables.TableRoutingTarget, bool) {
-	if len(targets) == 0 {
-		return configstoreTables.TableRoutingTarget{}, false
-	}
-
-	// Filter out negative weights as a precaution against malformed DB data.
-	// Negative weights are blocked at write time by validateRoutingTargets, but
-	// we guard here defensively so a bad row cannot corrupt the cumulative range.
-	valid := make([]configstoreTables.TableRoutingTarget, 0, len(targets))
+func routingTargets(targets []configstoreTables.TableRoutingTarget, provider schemas.ModelProvider, model string) []schemas.RoutingTarget {
+	options := make([]schemas.RoutingTarget, 0, len(targets))
 	for _, t := range targets {
-		if t.Weight >= 0 {
-			valid = append(valid, t)
+		if t.Weight < 0 {
+			continue
 		}
-	}
-	if len(valid) == 0 {
-		return configstoreTables.TableRoutingTarget{}, false
-	}
-
-	total := 0.0
-	for _, t := range valid {
-		total += t.Weight
-	}
-
-	// All weights are 0 — select uniformly at random among valid targets.
-	if total == 0 {
-		return valid[rand.IntN(len(valid))], true
-	}
-
-	if len(valid) == 1 {
-		return valid[0], true
-	}
-
-	r := rand.Float64() * total
-	cumulative := 0.0
-	for _, t := range valid {
-		cumulative += t.Weight
-		if r < cumulative {
-			return t, true
+		target := schemas.RoutingTarget{Provider: provider, Model: model, Weight: t.Weight}
+		if t.Provider != nil && *t.Provider != "" {
+			target.Provider = schemas.ModelProvider(*t.Provider)
 		}
+		if t.Model != nil && *t.Model != "" {
+			target.Model = *t.Model
+		}
+		if t.KeyID != nil {
+			target.KeyID = *t.KeyID
+		}
+		options = append(options, target)
 	}
-	return valid[len(valid)-1], true
+	return options
 }
 
 // buildScopeChain orders the scopes a request matches rules at, most specific first:

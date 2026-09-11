@@ -145436,6 +145436,253 @@
           }
         }
       ]
+    },
+    {
+      "name": "77. Routing resilience (fake OpenAI-compatible upstreams)",
+      "description": "Opt-in local fake-upstream regression. Start tests/routingresilience/compose.yml; set baseUrl to the test gateway and routingResilienceTests=true. Tests assert target stability and HTTP/SSE consistency; outage/recovery is exercised by tests/routingresilience/check.py. No paid providers.",
+      "item": [
+        {
+          "name": "Seed session - routing resilience openai gpt-test glm-test",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get(\"routingResilienceTests\") !== \"true\") { pm.execution.skipRequest(); }",
+                  "pm.environment.set(\"routingResilienceSession\", \"routing-harness-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"gateway succeeds\", function () { pm.expect(pm.response.code, pm.response.text()).to.equal(200); });",
+                  "if (pm.response.code === 200) { pm.environment.set(\"routingResilienceTarget\", pm.response.json().choices[0].message.content); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "session-id",
+                "value": "{{routingResilienceSession}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"balanced\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"provider harness routing resilience\"\n    }\n  ],\n  \"max_tokens\": 8,\n  \"stream\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reuse session - routing resilience openai gpt-test glm-test",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get(\"routingResilienceTests\") !== \"true\") { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"gateway succeeds\", function () { pm.expect(pm.response.code, pm.response.text()).to.equal(200); });",
+                  "pm.test(\"same session stays on its target\", function () { pm.expect(pm.response.json().choices[0].message.content).to.equal(pm.environment.get(\"routingResilienceTarget\")); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "session-id",
+                "value": "{{routingResilienceSession}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"balanced\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"provider harness routing resilience\"\n    }\n  ],\n  \"max_tokens\": 8,\n  \"stream\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Stream same session - routing resilience openai gpt-test glm-test",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get(\"routingResilienceTests\") !== \"true\") { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"gateway succeeds\", function () { pm.expect(pm.response.code, pm.response.text()).to.equal(200); });",
+                  "pm.test(\"stream stays on session target\", function () { var chunks = pm.response.text().split(\"\\n\").filter(function (l) { return l.indexOf(\"data: \") === 0 && l !== \"data: [DONE]\"; }).map(function (l) { return JSON.parse(l.slice(6)); }); var texts = chunks.map(function (c) { return c.choices && c.choices[0] && c.choices[0].delta && c.choices[0].delta.content || \"\"; }).join(\"\"); pm.expect(texts).to.equal(pm.environment.get(\"routingResilienceTarget\")); pm.expect(pm.response.text()).to.include(\"[DONE]\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "session-id",
+                "value": "{{routingResilienceSession}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"balanced\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"provider harness routing resilience\"\n    }\n  ],\n  \"max_tokens\": 8,\n  \"stream\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Session TTL expiry - routing resilience openai gpt-test glm-test",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.environment.get(\"routingResilienceTests\") !== \"true\") { pm.execution.skipRequest(); } else {",
+                  "  var session = \"routing-ttl-\" + Date.now(); pm.environment.set(\"routingResilienceTTLSession\", session);",
+                  "  var control = pm.environment.get(\"fakeLLMUrl\") || \"http://127.0.0.1:29090\";",
+                  "  var headers = {\"Content-Type\":\"application/json\", \"session-id\":session, \"x-bf-session-ttl\":\"1s\"};",
+                  "  pm.sendRequest({url:control+\"/control\", method:\"POST\", header:{\"Content-Type\":\"application/json\"}, body:{mode:\"raw\",raw:JSON.stringify({route:\"a\",status:503})}}, function(err) {",
+                  "    pm.expect(err).to.equal(null);",
+                  "    pm.sendRequest({url:pm.environment.get(\"baseUrl\")+\"/v1/chat/completions\", method:\"POST\", header:headers, body:{mode:\"raw\",raw:\"{\\\"model\\\": \\\"a/gpt-test\\\", \\\"fallbacks\\\": [\\\"b/glm-test\\\"], \\\"messages\\\": [{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"routing resilience ttl regression\\\"}], \\\"max_tokens\\\": 8}\"}}, function(err, res) {",
+                  "      pm.test(\"seed request uses fallback\", function() { pm.expect(err).to.equal(null); pm.expect(res.code).to.equal(200); pm.expect(res.json().choices[0].message.content).to.equal(\"b\"); });",
+                  "      pm.sendRequest({url:control+\"/control\", method:\"POST\", header:{\"Content-Type\":\"application/json\"}, body:{mode:\"raw\",raw:JSON.stringify({route:\"a\",status:200})}}, function(err) {",
+                  "        pm.expect(err).to.equal(null); setTimeout(function() {}, 5000);",
+                  "      });",
+                  "    });",
+                  "  });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"expired affinity returns to recovered primary\", function() { pm.expect(pm.response.code, pm.response.text()).to.equal(200); pm.expect(pm.response.json().choices[0].message.content).to.equal(\"a\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "session-id",
+                "value": "{{routingResilienceTTLSession}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"a/gpt-test\", \"fallbacks\": [\"b/glm-test\"], \"messages\": [{\"role\": \"user\", \"content\": \"routing resilience ttl regression\"}], \"max_tokens\": 8}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

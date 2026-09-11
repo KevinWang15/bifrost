@@ -53,6 +53,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/vllm"
 	"github.com/maximhq/bifrost/core/providers/wafer"
 	"github.com/maximhq/bifrost/core/providers/xai"
+	"github.com/maximhq/bifrost/core/routingstrategy"
 	schemas "github.com/maximhq/bifrost/core/schemas"
 	"github.com/valyala/fasthttp"
 )
@@ -72,6 +73,7 @@ type ChannelMessage struct {
 // Bifrost manages providers and maintains specified open channels for concurrent processing.
 // It handles request routing, provider management, and response processing.
 type Bifrost struct {
+	routingResilience   *routingstrategy.Manager
 	ctx                 *schemas.BifrostContext
 	cancel              context.CancelFunc
 	account             schemas.Account                     // account interface
@@ -253,6 +255,13 @@ func Init(ctx context.Context, config schemas.BifrostConfig) (*Bifrost, error) {
 		modelCatalog:  config.ModelCatalog,
 	}
 	bifrost.tracer.Store(&tracerWrapper{tracer: tracer})
+	if config.RoutingResilience != nil && (config.RoutingResilience.SessionStickiness || config.RoutingResilience.OutageDetection) {
+		manager, err := routingstrategy.New(*config.RoutingResilience, config.KVStore)
+		if err != nil {
+			return nil, err
+		}
+		bifrost.routingResilience = manager
+	}
 	if config.LLMPlugins == nil {
 		config.LLMPlugins = make([]schemas.LLMPlugin, 0)
 	}
@@ -378,6 +387,9 @@ func Init(ctx context.Context, config schemas.BifrostConfig) (*Bifrost, error) {
 		if err != nil {
 			bifrost.logger.Warn("failed to prepare provider %s: %v", providerKey, err)
 		}
+	}
+	if bifrost.routingResilience != nil {
+		bifrost.routingResilience.Start(ctx, bifrost.probeRoutingTarget)
 	}
 	return bifrost, nil
 }
@@ -4748,7 +4760,9 @@ func (bifrost *Bifrost) RunPreRequestHooks(ctx *schemas.BifrostContext, req *sch
 
 	pipeline := bifrost.getPluginPipeline()
 	defer bifrost.releasePluginPipeline(pipeline)
+	bifrost.routingResilience.Attach(ctx, req)
 	pipeline.RunPreRequestHooks(ctx, req)
+	bifrost.routingResilience.Finalize(ctx, req)
 	// This path has no downstream post-hook cleanup, so drain any plugin logs
 	// emitted by PreRequestHook here to avoid them bleeding into a later request
 	// on a reused/long-lived context (e.g. realtime WS connections).
@@ -5250,7 +5264,9 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 	// (and may mutate other request fields). Mutations commit to req and are observed by
 	// all downstream phases and fallbacks. Plugin errors are non-blocking (logged + skipped).
 	preReqPipeline := bifrost.getPluginPipeline()
+	bifrost.routingResilience.Attach(ctx, req)
 	preReqPipeline.RunPreRequestHooks(ctx, req)
+	bifrost.routingResilience.Finalize(ctx, req)
 	bifrost.releasePluginPipeline(preReqPipeline)
 	bifrost.endCoreSpan(setupSpan)
 	// "miscellaneous" phase: pre-dispatch glue (field re-read + validation) on no other
@@ -5393,7 +5409,9 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 
 	// PreRequestHook: once-per-request phase. See handleRequest for semantics.
 	preReqPipeline := bifrost.getPluginPipeline()
+	bifrost.routingResilience.Attach(ctx, req)
 	preReqPipeline.RunPreRequestHooks(ctx, req)
+	bifrost.routingResilience.Finalize(ctx, req)
 	bifrost.releasePluginPipeline(preReqPipeline)
 	// "miscellaneous" phase: pre-dispatch glue (field re-read + validation) on no other
 	// span. Mirrors handleRequest so streaming classifies this cost too.
@@ -6125,6 +6143,28 @@ func executeRequestWithRetries[T any](
 	req *schemas.BifrostRequest,
 	logger schemas.Logger,
 ) (result T, bifrostError *schemas.BifrostError) {
+	manager, _ := schemas.RoutingSelectorFromContext(ctx).(*routingstrategy.Manager)
+	route := routingstrategy.Route{Provider: providerKey, Model: model, API: routingstrategy.API(requestType)}
+	epoch, allowed := manager.Begin(route)
+	if !allowed {
+		ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Skipping unavailable route %s/%s", providerKey, model))
+		return result, &schemas.BifrostError{IsBifrostError: true, StatusCode: schemas.Ptr(503), AllowFallbacks: schemas.Ptr(true), Error: &schemas.ErrorField{Message: "route temporarily unavailable", Code: schemas.Ptr("route_unavailable")}}
+	}
+	attempted := false
+	watchingStream := false
+	defer func() {
+		if watchingStream {
+			return
+		}
+		if attempted && ctx.Err() == nil {
+			manager.Observe(route, epoch, bifrostError)
+		} else {
+			manager.Observe(route, epoch, &schemas.BifrostError{IsBifrostError: true})
+		}
+		if attempted && bifrostError == nil {
+			manager.BindSuccess(ctx, route)
+		}
+	}()
 	var attempts int
 	checkAzurePreamble := providerKey == schemas.Azure && IsStreamRequestType(requestType)
 
@@ -6441,6 +6481,7 @@ func executeRequestWithRetries[T any](
 		}
 
 		// Attempt the request
+		attempted = true
 		result, bifrostError = requestHandler(currentKey)
 
 		// Detect errors carried inside HTTP 200 streams before returning success.
@@ -6486,6 +6527,10 @@ func executeRequestWithRetries[T any](
 					close(closedCh)
 					result = any(closedCh).(T)
 				} else {
+					if manager != nil {
+						checkedStream = manager.WatchStream(ctx, route, epoch, checkedStream)
+						watchingStream = true
+					}
 					result = any(checkedStream).(T)
 				}
 			}
@@ -9164,6 +9209,7 @@ func getCachedKeyFromStore(kvStore schemas.KVStore, kvKey string, supportedKeys 
 // Shutdown gracefully stops all workers when triggered.
 // It closes all request channels and waits for workers to exit.
 func (bifrost *Bifrost) Shutdown() {
+	bifrost.routingResilience.Close()
 	bifrost.providerLifecycleMu.Lock()
 	defer bifrost.providerLifecycleMu.Unlock()
 

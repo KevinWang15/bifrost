@@ -1,0 +1,29 @@
+services:
+  fake:
+    image: python:3.12-slim
+    command: ["python", "/test/fakellm.py"]
+    volumes:
+      - .:/test:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/state')"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "127.0.0.1:29090:9000"
+  gateway:
+    image: golang:1.27.0-bookworm
+    command: ["/test/bifrost", "-host", "0.0.0.0", "-port", "8080", "-app-dir", "/data", "-log-level", "warn"]
+    volumes:
+      - ${BIFROST_ROUTING_TEST_DIR:-../../tmp/routingresilience}:/test:ro
+      - ${BIFROST_ROUTING_TEST_DIR:-../../tmp/routingresilience}/data:/data
+    ports:
+      - "127.0.0.1:28080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      fake:
+        condition: service_healthy

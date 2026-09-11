@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
+	"github.com/maximhq/bifrost/core/routingstrategy"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/grant"
@@ -474,69 +474,68 @@ func (p *GovernancePlugin) LoadBalanceProvider(ctx *schemas.BifrostContext, req 
 		return nil
 	}
 
-	var selectedProvider schemas.ModelProvider
-	totalWeight := 0.0
+	options := make([]schemas.RoutingTarget, 0, len(weighted))
 	for _, candidate := range weighted {
-		totalWeight += getWeight(candidate.Weight)
+		providerName := schemas.ModelProvider(candidate.Provider)
+		m := modelStr
+		if p.modelCatalog != nil {
+			var err error
+			m, err = p.modelCatalog.RefineModelForProvider(providerName, modelStr)
+			if err != nil {
+				continue
+			}
+		}
+		options = append(options, schemas.RoutingTarget{Provider: providerName, Model: m, Weight: getWeight(candidate.Weight)})
 	}
-	// Generate random number between 0 and totalWeight
-	randomValue := rand.Float64() * totalWeight
-	// Select provider based on weighted random selection
-	currentWeight := 0.0
-	for _, candidate := range weighted {
-		currentWeight += getWeight(candidate.Weight)
-		if randomValue <= currentWeight {
-			selectedProvider = schemas.ModelProvider(candidate.Provider)
-			break
+	if schemas.RoutingSelectorFromContext(ctx) != nil {
+		// Explicit cross-model fallbacks remain eligible session destinations only
+		// while the current request's grants and funding permit that target.
+		for _, fb := range existingFallbacks {
+			for _, candidate := range access.ProvidersForModel(fb.Model) {
+				if candidate.Provider != string(fb.Provider) {
+					continue
+				}
+				if decision, err := p.store.CheckProviderCandidateExclusion(ctx, access, candidate, fb.Model); err != nil || decision != DecisionAllow {
+					continue
+				}
+				options = append(options, schemas.RoutingTarget{Provider: fb.Provider, Model: fb.Model, FallbackOnly: true})
+			}
 		}
 	}
-	// Fallback: if no provider was selected (shouldn't happen but guard against FP issues)
-	if selectedProvider == "" {
-		selectedProvider = schemas.ModelProvider(weighted[0].Provider)
+	selected, ok := routingstrategy.Select(ctx, "governance:"+modelStr, options)
+	if !ok {
+		// Keep an eligible primary so the core health gate fails closed and handles fallbacks.
+		if len(options) == 0 {
+			return fmt.Errorf("no routable providers for model %s", modelStr)
+		}
+		selected = options[0]
 	}
-
+	selectedProvider, selectedModel := selected.Provider, selected.Model
+	if selected.FallbackOnly {
+		fallbacks := append([]schemas.Fallback(nil), existingFallbacks...)
+		for _, t := range options {
+			if !t.FallbackOnly {
+				fallbacks = append(fallbacks, schemas.Fallback{Provider: t.Provider, Model: t.Model})
+			}
+		}
+		req.SetFallbacks(fallbacks)
+	}
 	p.logger.Debug("[governance] Selected provider: %s", selectedProvider)
 	ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Selected provider %s for model %s (from %d eligible: %v)", selectedProvider, modelStr, len(eligible), eligibleProviders))
 
-	refinedModel := modelStr
-	// Refine the model for the selected provider
-	if p.modelCatalog != nil {
-		var err error
-		refinedModel, err = p.modelCatalog.RefineModelForProvider(selectedProvider, modelStr)
-		if err != nil {
-			return err
-		}
-	}
-
 	req.SetProvider(selectedProvider)
-	req.SetModel(refinedModel)
+	req.SetModel(selectedModel)
 
 	schemas.AppendToContextList(ctx, schemas.BifrostContextKeyRoutingEnginesUsed, schemas.RoutingEngineGovernance)
 
-	if len(existingFallbacks) == 0 && len(weighted) > 1 {
-		fallbackCandidates := append([]schemas.ProviderCandidate(nil), weighted...)
-		sort.Slice(fallbackCandidates, func(i, j int) bool {
-			return getWeight(fallbackCandidates[i].Weight) > getWeight(fallbackCandidates[j].Weight)
-		})
-
-		// Filter out the selected provider and create fallbacks array
+	if len(existingFallbacks) == 0 && len(options) > 1 {
+		fallbackCandidates := append([]schemas.RoutingTarget(nil), options...)
+		sort.Slice(fallbackCandidates, func(i, j int) bool { return fallbackCandidates[i].Weight > fallbackCandidates[j].Weight })
 		fallbacks := make([]schemas.Fallback, 0, len(fallbackCandidates)-1)
 		for _, candidate := range fallbackCandidates {
-			if candidate.Provider == string(selectedProvider) {
-				continue
+			if candidate.Provider != selectedProvider {
+				fallbacks = append(fallbacks, schemas.Fallback{Provider: candidate.Provider, Model: candidate.Model})
 			}
-			fbProvider := schemas.ModelProvider(candidate.Provider)
-			fbModel := modelStr
-			if p.modelCatalog != nil {
-				refined, err := p.modelCatalog.RefineModelForProvider(fbProvider, modelStr)
-				if err != nil {
-					p.logger.Warn("failed to refine model for fallback, skipping fallback in governance plugin: %v", err)
-					ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelWarn, fmt.Sprintf("Fallback provider %s skipped: failed to refine model %s for this provider", fbProvider, modelStr))
-					continue
-				}
-				fbModel = refined
-			}
-			fallbacks = append(fallbacks, schemas.Fallback{Provider: fbProvider, Model: fbModel})
 		}
 		req.SetFallbacks(fallbacks)
 		ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Added %d fallback providers", len(fallbacks)))

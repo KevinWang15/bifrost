@@ -236,6 +236,7 @@
             "pages": [
               "features/drop-in-replacement",
               "features/retries-and-fallbacks",
+              "features/routing-resilience",
               "features/compat-plugin",
               "features/keys-management",
               "features/async-inference",

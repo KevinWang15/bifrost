@@ -2811,6 +2811,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		MCPHeadersProvider: s.Config.MCPHeadersProvider,
 		Logger:             logger,
 		KVStore:            s.Config.KVStore,
+		RoutingResilience:  s.Config.RoutingResilience,
 		ModelCatalog:       s.Config.ModelCatalog,
 	})
 	if err != nil {

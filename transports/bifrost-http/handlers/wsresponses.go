@@ -812,6 +812,19 @@ func createBifrostContextFromAuth(handlerStore lib.HandlerStore, auth *authHeade
 	// governance refuses a request nobody settled, and a keyless connection is not that.
 	lib.SettleIdentity(ctx)
 
+	// Use the same harness identity parser as HTTP. Reconnecting a
+	// socket must not replace an explicitly supplied conversation identity.
+	sessionHeaders := make(map[string]string, len(auth.headers))
+	for k, values := range auth.headers {
+		if len(values) > 0 {
+			sessionHeaders[strings.ToLower(k)] = values[len(values)-1]
+		}
+	}
+	if id := lib.ResolveSessionIDFromHeaders(sessionHeaders); id != "" {
+		ctx.SetValue(schemas.BifrostContextKeySessionID, id)
+	}
+	ctx.SetValue(schemas.BifrostContextKeyRequestHeaders, sessionHeaders)
+
 	// Forward x-bf-* headers
 	matcher := (*lib.HeaderMatcher)(nil)
 	if handlerStore != nil {

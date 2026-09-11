@@ -23,6 +23,7 @@ type KeyPoolFilter func(ctx *BifrostContext, provider ModelProvider, model strin
 // It contains the necessary components for setting up the system including account details,
 // plugins, logging, and initial pool size.
 type BifrostConfig struct {
+	RoutingResilience  *RoutingResilienceConfig
 	Account            Account
 	LLMPlugins         []LLMPlugin
 	MCPPlugins         []MCPPlugin

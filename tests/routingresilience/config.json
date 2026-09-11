@@ -1,0 +1,35 @@
+{
+  "$schema": "../../transports/config.schema.json",
+  "version": 2,
+  "routing_resilience": {
+    "session_stickiness": true,
+    "outage_detection": true,
+    "failure_threshold": 1,
+    "cooldown_seconds": 600,
+    "probe_interval_seconds": 2,
+    "probe_timeout_seconds": 2
+  },
+  "client": {"initial_pool_size": 10, "enable_logging": true, "enforce_auth_on_inference": false},
+  "providers": {
+    "a": {
+      "keys": [{"name": "fake-a", "value": "fake-a", "models": ["*"], "weight": 1}],
+      "network_config": {"base_url": "http://fake:9000/a", "max_retries": 0, "allow_private_network": true},
+      "custom_provider_config": {"base_provider_type": "openai"}
+    },
+    "b": {
+      "keys": [{"name": "fake-b", "value": "fake-b", "models": ["*"], "weight": 1}],
+      "network_config": {"base_url": "http://fake:9000/b", "max_retries": 0, "allow_private_network": true},
+      "custom_provider_config": {"base_provider_type": "openai"}
+    }
+  },
+  "governance": {
+    "routing_rules": [{
+      "id": "f3c2d1e0-1111-4222-8333-444455556666",
+      "name": "fake weighted models",
+      "enabled": true,
+      "scope": "global",
+      "cel_expression": "model == 'balanced'",
+      "targets": [{"provider": "a", "model": "gpt-test", "weight": 0.5}, {"provider": "b", "model": "glm-test", "weight": 0.5}]
+    }]
+  }
+}

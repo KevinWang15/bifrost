@@ -1,0 +1,71 @@
+stages:
+  - test
+  - publish
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - transports/version
+        - transports/internal_version
+    - when: never
+
+variables:
+  HARBOR_REGISTRY: harbor.jqdomain.com
+  BIFROST_IMAGE_REPOSITORY: harbor.jqdomain.com/hpc-llm-tools/bifrost
+
+.publish-image:
+  stage: publish
+  tags:
+    - shared-docker
+  image:
+    name: harbor.jqdomain.com/docker.io/moby/buildkit:rootless
+    entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  interruptible: true
+
+test-bifrost:
+  stage: test
+  tags:
+    - shared-docker
+  image: harbor.jqdomain.com/docker.io/golang:1.26.4-alpine3.23
+  before_script:
+    - apk add --no-cache bash gcc musl-dev sqlite-dev
+  script:
+    - bash .github/workflows/scripts/setup-go-workspace.sh
+    - cd transports
+    - GOWORK=off go test -mod=readonly ./bifrost-http/server
+  interruptible: true
+
+publish-bifrost:
+  extends: .publish-image
+  stage: publish
+  needs:
+    - test-bifrost
+  script:
+    - BIFROST_VERSION="$(sed -n '1p' transports/version)"
+    - BIFROST_INTERNAL_VERSION="$(sed -n '1p' transports/internal_version)"
+    - |
+      case "$BIFROST_VERSION" in
+        *[!0-9.]*|"") echo "Invalid Bifrost version: $BIFROST_VERSION" >&2; exit 1 ;;
+      esac
+    - |
+      case "$BIFROST_INTERNAL_VERSION" in
+        *[!A-Za-z0-9._-]*|"") echo "Invalid Bifrost internal version: $BIFROST_INTERNAL_VERSION" >&2; exit 1 ;;
+      esac
+    - test -n "$HARBOR_USERNAME" || { echo "HARBOR_USERNAME is not configured" >&2; exit 1; }
+    - test -n "$HARBOR_PASSWORD" || { echo "HARBOR_PASSWORD is not configured" >&2; exit 1; }
+    - mkdir -p "$HOME/.docker"
+    - HARBOR_AUTH="$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 | tr -d '\n')"
+    - printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$HARBOR_REGISTRY" "$HARBOR_AUTH" > "$HOME/.docker/config.json"
+    - BIFROST_IMAGE="$BIFROST_IMAGE_REPOSITORY:v$BIFROST_VERSION-$BIFROST_INTERNAL_VERSION"
+    - echo "Building and publishing $BIFROST_IMAGE"
+    - >-
+      buildctl-daemonless.sh build
+      --frontend dockerfile.v0
+      --local context=.
+      --local dockerfile=.
+      --opt filename=transports/Dockerfile.local
+      --opt build-arg:VERSION="$BIFROST_VERSION"
+      --output "type=image,name=$BIFROST_IMAGE,push=true"

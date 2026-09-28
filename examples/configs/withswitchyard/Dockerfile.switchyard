@@ -1,0 +1,14 @@
+FROM rust:1.96.1-bookworm AS builder
+ARG SWITCHYARD_REVISION=64def5647b711c3c3ce2840ed4feb42c85cea6db
+WORKDIR /build
+RUN git init . && git remote add origin https://github.com/NVIDIA-NeMo/Switchyard.git \
+    && git fetch --depth 1 origin "$SWITCHYARD_REVISION" \
+    && git checkout --detach FETCH_HEAD
+RUN cargo build --locked --release --jobs 6 -p switchyard-server
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/switchyard-server /usr/local/bin/switchyard-server
+USER 1000:1000
+ENTRYPOINT ["switchyard-server"]

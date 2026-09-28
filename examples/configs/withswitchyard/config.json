@@ -1,0 +1,40 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "client": {
+    "enable_logging": false,
+    "header_filter_config": { "allowlist": ["x-switchyard-session-id"] }
+  },
+  "config_store": { "enabled": false },
+  "logs_store": { "enabled": false },
+  "framework": {
+    "pricing": {
+      "pricing_url": "file:///app/data/catalog.json",
+      "model_parameters_url": "file:///app/data/catalog.json",
+      "mcp_library_sync_interval": 0,
+      "live_models_sync_interval": 0
+    }
+  },
+  "providers": {
+    "switchyard": {
+      "keys": [
+        { "name": "local-switchyard", "value": "local-only", "models": ["*"], "weight": 1 }
+      ],
+      "network_config": {
+        "base_url": "http://switchyard:4000",
+        "allow_private_network": true,
+        "default_request_timeout_in_seconds": 180,
+        "max_retries": 0
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "list_models": true,
+          "chat_completion": true,
+          "chat_completion_stream": true,
+          "responses": true,
+          "responses_stream": true
+        }
+      }
+    }
+  }
+}

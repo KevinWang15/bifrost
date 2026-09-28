@@ -1,0 +1,459 @@
+{
+  "recorded_date": "2026-09-28",
+  "scope": "Historical Docker experiment using synthetic prompts; selected fields only. Credentials, account totals, response IDs and request IDs omitted. Not a quality or load benchmark.",
+  "bifrost_revision": "6a622ad5212d1968c0cdc128bcc6daecc70bc485",
+  "switchyard_revision": "64def5647b711c3c3ce2840ed4feb42c85cea6db",
+  "deterministic_checks": [
+    {
+      "name": "simple",
+      "passed": true
+    },
+    {
+      "name": "complex",
+      "passed": true
+    },
+    {
+      "name": "invalid verdict",
+      "passed": true
+    },
+    {
+      "name": "chat streaming",
+      "passed": true
+    },
+    {
+      "name": "Responses API",
+      "passed": true
+    },
+    {
+      "name": "Responses streaming",
+      "passed": true
+    },
+    {
+      "name": "prefixed session header",
+      "passed": true
+    },
+    {
+      "name": "tool call forwarded",
+      "passed": true
+    },
+    {
+      "name": "tool continuation holds model",
+      "passed": true
+    },
+    {
+      "name": "new user turn escalates",
+      "passed": true
+    },
+    {
+      "name": "later user turn de-escalates",
+      "passed": true
+    },
+    {
+      "name": "judge HTTP failure",
+      "passed": true
+    },
+    {
+      "name": "judge timeout",
+      "passed": true
+    },
+    {
+      "name": "Bifrost fallback: JUDGE_ERROR",
+      "passed": true
+    },
+    {
+      "name": "Bifrost fallback: JUDGE_TIMEOUT",
+      "passed": true
+    }
+  ],
+  "first_batch": [
+    {
+      "name": "extract",
+      "prompt": "Extract name and age from \"Ada is 37 years old.\" Return only JSON with name and age keys.",
+      "status": 200,
+      "elapsed_s": 12.504,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "```json\n{\n  \"name\": \"Ada\",\n  \"age\": 37\n}\n```"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "chinese",
+      "prompt": "把‘Good morning, see you tomorrow.’翻译成中文。只输出译文。",
+      "status": 200,
+      "elapsed_s": 11.382,
+      "model": "qwen/qwen3.5-397b-a17b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "早上好，明天见。",
+          "refusal": null,
+          "reasoning": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Source text: 'Good morning, see you tomorrow.'\n    *   Target language: Chinese (中文).\n    *   Constraint: Only output the translation (只输出译文).\n\n2.  **Translate the Source Text:**\n    *   \"Good morning\" -> 早上好 (Zǎoshang hǎo) or 早安 (Zǎo'ān).\n    *   \"see you tomorrow\" -> 明天见 (Míngtiān jiàn).\n    *   Combined: 早上好，明天见。or 早安，明天见。\n\n3.  **Select the Most Natural Translation:**\n    *   \"早上好，明天见。\" is very standard and commonly used.\n    *   \"早安，明天见。\" is also good, slightly more concise.\n    *   Let's go with the most common one: \"早上好，明天见。\"\n\n4.  **Adhere to Constraints:**\n    *   The user requested *only* the translation (只输出译文). No explanations, no extra text.\n\n5.  **Final Output Generation:**\n    *   早上好，明天见。\n\n6.  **Review against constraints:**\n    *   Is it Chinese? Yes.\n    *   Is it only the translation? Yes.\n\n7.  **Final Decision:** 早上好，明天见。 (Or potentially 早安，明天见。Both are fine. I'll choose 早上好，明天见。as it's slightly more conversational matching the tone of \"Good morning\".)\n\n    *Wait, one nuance:* \"Good morning, see you tomorrow.\" is a bit unusual contextually (usually you say goodbye in the morning if you won't see them until tomorrow, or you say goodnight). However, as a translation task, I should translate the meaning faithfully.\n    *   Scenario: Meeting someone in the morning, but indicating you won't see them again until tomorrow (maybe leaving early).\n    *   Translation: 早上好，明天见。\n\n    *Alternative:* 早安，明天见。\n    Both are acceptable. I will use 早上好，明天见。\n\n    *Refining constraint:* \"只输出译文\" (Only output translation).\n\n    *Final Output:* 早上好，明天见。\n",
+          "reasoning_details": [
+            {
+              "index": 0,
+              "type": "reasoning.text",
+              "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Source text: 'Good morning, see you tomorrow.'\n    *   Target language: Chinese (中文).\n    *   Constraint: Only output the translation (只输出译文).\n\n2.  **Translate the Source Text:**\n    *   \"Good morning\" -> 早上好 (Zǎoshang hǎo) or 早安 (Zǎo'ān).\n    *   \"see you tomorrow\" -> 明天见 (Míngtiān jiàn).\n    *   Combined: 早上好，明天见。or 早安，明天见。\n\n3.  **Select the Most Natural Translation:**\n    *   \"早上好，明天见。\" is very standard and commonly used.\n    *   \"早安，明天见。\" is also good, slightly more concise.\n    *   Let's go with the most common one: \"早上好，明天见。\"\n\n4.  **Adhere to Constraints:**\n    *   The user requested *only* the translation (只输出译文). No explanations, no extra text.\n\n5.  **Final Output Generation:**\n    *   早上好，明天见。\n\n6.  **Review against constraints:**\n    *   Is it Chinese? Yes.\n    *   Is it only the translation? Yes.\n\n7.  **Final Decision:** 早上好，明天见。 (Or potentially 早安，明天见。Both are fine. I'll choose 早上好，明天见。as it's slightly more conversational matching the tone of \"Good morning\".)\n\n    *Wait, one nuance:* \"Good morning, see you tomorrow.\" is a bit unusual contextually (usually you say goodbye in the morning if you won't see them until tomorrow, or you say goodnight). However, as a translation task, I should translate the meaning faithfully.\n    *   Scenario: Meeting someone in the morning, but indicating you won't see them again until tomorrow (maybe leaving early).\n    *   Translation: 早上好，明天见。\n\n    *Alternative:* 早安，明天见。\n    Both are acceptable. I will use 早上好，明天见。\n\n    *Refining constraint:* \"只输出译文\" (Only output translation).\n\n    *Final Output:* 早上好，明天见。\n"
+            }
+          ],
+          "reasoning_content": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Source text: 'Good morning, see you tomorrow.'\n    *   Target language: Chinese (中文).\n    *   Constraint: Only output the translation (只输出译文).\n\n2.  **Translate the Source Text:**\n    *   \"Good morning\" -> 早上好 (Zǎoshang hǎo) or 早安 (Zǎo'ān).\n    *   \"see you tomorrow\" -> 明天见 (Míngtiān jiàn).\n    *   Combined: 早上好，明天见。or 早安，明天见。\n\n3.  **Select the Most Natural Translation:**\n    *   \"早上好，明天见。\" is very standard and commonly used.\n    *   \"早安，明天见。\" is also good, slightly more concise.\n    *   Let's go with the most common one: \"早上好，明天见。\"\n\n4.  **Adhere to Constraints:**\n    *   The user requested *only* the translation (只输出译文). No explanations, no extra text.\n\n5.  **Final Output Generation:**\n    *   早上好，明天见。\n\n6.  **Review against constraints:**\n    *   Is it Chinese? Yes.\n    *   Is it only the translation? Yes.\n\n7.  **Final Decision:** 早上好，明天见。 (Or potentially 早安，明天见。Both are fine. I'll choose 早上好，明天见。as it's slightly more conversational matching the tone of \"Good morning\".)\n\n    *Wait, one nuance:* \"Good morning, see you tomorrow.\" is a bit unusual contextually (usually you say goodbye in the morning if you won't see them until tomorrow, or you say goodnight). However, as a translation task, I should translate the meaning faithfully.\n    *   Scenario: Meeting someone in the morning, but indicating you won't see them again until tomorrow (maybe leaving early).\n    *   Translation: 早上好，明天见。\n\n    *Alternative:* 早安，明天见。\n    Both are acceptable. I will use 早上好，明天见。\n\n    *Refining constraint:* \"只输出译文\" (Only output translation).\n\n    *Final Output:* 早上好，明天见。\n"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-397b-a17b"
+    },
+    {
+      "name": "bounded_code",
+      "prompt": "Write a Python function is_palindrome(s) that compares the string exactly, including case and punctuation. Tests: '' -> True; 'aba' -> True; 'ab' -> False; 'Aa' -> False. Return only the function.",
+      "status": 200,
+      "elapsed_s": 8.088,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "```python\ndef is_palindrome(s):\n    return s == s[::-1]\n```"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "closure_bug",
+      "prompt": "Explain the bug in Python fs = [lambda: i for i in range(3)]; print([f() for f in fs]). Give the actual output and a minimal fix. Be concise.",
+      "status": 200,
+      "elapsed_s": 9.034,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "### The Bug\nThe bug is caused by **late binding** in Python closures. The lambda functions capture the variable `i` by reference, not by value. By the time the list comprehension `[f() for f in fs]` executes and calls the lambdas, the loop has finished, and `i` holds its final value (`2`). Therefore, all three functions return `2`.\n\n**Actual Output:**\n```python\n[2, 2, 2]\n```\n\n### Minimal Fix\nBind the current value of `i` to a default argument in the lambda. Default arguments are evaluated at definition time, creating a new scope for each iteration.\n\n```python\nfs = [lambda i=i: i for i in range(3)]\nprint([f() for f in fs])\n# Output: [0, 1, 2]\n```"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "concurrency",
+      "prompt": "Design a bounded multi-producer multi-consumer queue in C++20 using atomics only. Explain linearization points, memory ordering, ABA prevention, wraparound, and a concrete adversarial interleaving that breaks a naive implementation. Distinguish safety from lock-free progress; do not assert a proof you have not justified. Limit the answer to 300 words.",
+      "status": 200,
+      "elapsed_s": 9.625,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "A bounded MPMC queue in C++20 using only atomics requires careful design to ensure safety (no data races) and lock-free progress (no thread starvation). The core structure uses a ring buffer with head and tail pointers, typically implemented as `std::atomic<uint64_t>` with `memory_order_relaxed` for reads and `memory_order_acquire/release` for updates.\n\n**Linearization Points**: These are the specific atomic operations where logical state changes become visible. For `push`, the linearization point is the successful `compare_exchange_weak` of the tail pointer. For `pop`, it is the successful `compare_exchange_weak` of the head pointer. These points guarantee that operations appear atomic to other threads.\n\n**Memory Ordering**: `memory_order_relaxed` suffices for pointer updates because the atomic operation itself provides the necessary synchronization via the CAS loop. However, the data payload must be protected. A common pattern involves a `std::atomic<bool>` flag per slot or a \"hazard pointer\" mechanism to ensure the data is not freed while a consumer might still access it. Without such a mechanism, `relaxed` ordering on the queue structure alone is insufficient for data safety.\n\n**ABA Prevention**: Naive CAS loops fail if a slot is written, read, and then overwritten to the original value. In a bounded queue, this is mitigated by using a wider type (e.g., `uint64_t` with a sequence number) or a \"tagged\" pointer approach, ensuring the CAS fails if the value changes even if the address remains the same.\n\n**Wraparound**: The ring buffer must handle index overflow. Using modulo arithmetic is slow; instead, allocate a power-of-two size and use bitwise AND (`& (SIZE-1)`) for indexing. The head/tail pointers must be wide enough to distinguish valid wraparounds from actual overflows, often requiring a sequence counter alongside the index.\n\n**Adversarial Interleaving**: Consider a naive implementation where `pop` reads the head, then reads the data, then updates the head. If Thread A reads head=0, Thread B pushes to slot 0, Thread A reads stale data (or garbage), and Thread A updates head=1, data corruption occurs. Worse, if Thread A reads head, Thread B pushes to the *same* slot A intended to read, and A updates head before B's push is visible, A skips valid data. This breaks safety.\n\n**Safety vs. Progress**:"
+        }
+      ],
+      "finish_reasons": [
+        "length"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "algorithm",
+      "prompt": "For a directed graph with integer edge weights, possibly negative, give an algorithm to determine for every pair (u,v) whether the shortest-path distance is finite, +infinity, or -infinity. Specify how negative cycles affect pairs, justify correctness, and analyze time and space. Be precise and stay within 300 words.",
+      "status": 200,
+      "elapsed_s": 7.666,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Run the Floyd-Warshall algorithm on the $n$-vertex graph to compute all-pairs shortest paths. Initialize $D[i][j] = w(i,j)$ if an edge exists, $0$ if $i=j$, and $+\\infty$ otherwise. After $n$ iterations, if $D[i][i] < 0$ for any vertex $i$, a negative cycle exists reachable from $i$.\n\nTo classify distances:\n1.  **Finite**: $D[u][v]$ is finite and $u$ cannot reach any negative cycle that can subsequently reach $v$.\n2.  **$+\\infty$**: No path exists from $u$ to $v$.\n3.  **$-\\infty$**: There exists a path from $u$ to $v$ that includes a negative cycle.\n\n**Algorithm Refinement**:\nFirst, identify all vertices $C$ belonging to or reachable from negative cycles using a reachability analysis (e.g., transitive closure on the subgraph of vertices with $D[i][i] < 0$). Let $R(x)$ be the set of vertices reachable from $x$.\n- If $v \\in R(C)$ and $u$ can reach $v$, then $dist(u,v) = -\\infty$.\n- Else if no path exists, $dist(u,v) = +\\infty$.\n- Else, $dist(u,v) = D[u][v]$.\n\n**Correctness**: A negative cycle allows traversing it infinitely many times to reduce path cost arbitrarily, yielding $-\\infty$ for any destination reachable after the cycle. If no such cycle lies on any path from $u$ to $v$, the standard shortest path is well-defined.\n\n**Complexity**:\n- **Time**: $O(n^3)$ for Floyd-Warshall plus $O(n^3)$ for reachability checks. Total: $O(n^3)$.\n- **Space**: $O(n^2)$ for the distance matrix and reachability matrix.\n\nThis approach correctly handles negative weights and cycles by distinguishing between paths affected by unbounded cost reduction and those with finite optimal lengths."
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "baseline_small",
+      "status": 200,
+      "elapsed_s": 10.853,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "```json\n{\n  \"name\": \"Ada\",\n  \"age\": 37\n}\n```"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b"
+    },
+    {
+      "name": "baseline_big",
+      "status": 200,
+      "elapsed_s": 1.597,
+      "model": "qwen/qwen3.5-397b-a17b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "{\"name\": \"Ada\", \"age\": 37}"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-397b-a17b"
+    },
+    {
+      "name": "responses",
+      "status": 200,
+      "elapsed_s": 4.802,
+      "model": "qwen/qwen3.5-397b-a17b",
+      "messages": [],
+      "finish_reasons": []
+    },
+    {
+      "name": "stream",
+      "status": 200,
+      "elapsed_s": 17.569,
+      "first_content_s": 17.568,
+      "done": true,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [],
+      "finish_reasons": [],
+      "stream_text": "1, 2, 3, 4, 5."
+    }
+  ],
+  "first_batch_judge_latency": {
+    "count": 8,
+    "total_ms": 41890.75,
+    "min_ms": 2241.92,
+    "max_ms": 10125.13,
+    "avg_ms": 5236.34,
+    "p50_ms": 6125.19,
+    "p99_ms": 10125.13
+  },
+  "recorded_verdict_repeats": [
+    {
+      "name": "chinese",
+      "status": 200,
+      "elapsed_s": 10.342,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "早上好，明天见。"
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b",
+      "judge_calls": [
+        {
+          "model": "qwen/qwen3-30b-a3b-instruct-2507",
+          "status": 200,
+          "elapsed_s": 8.427,
+          "finish_reason": "stop",
+          "verdict": {
+            "capability_boundary": "supported",
+            "crux": "The task requires a direct translation of a simple English sentence into Chinese, which is a well-defined and deterministic operation with no ambiguity in meaning or output format.",
+            "p_solve": 1.0,
+            "primary_rule": "SUP-1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "concurrency",
+      "status": 200,
+      "elapsed_s": 15.698,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "A bounded MPMC queue in C++20 using only atomics requires careful design to ensure safety (no data races) and lock-free progress (no thread starvation). The core structure uses a ring buffer with head and tail pointers, typically implemented as `std::atomic<uint64_t>` with `memory_order_relaxed` for reads and `memory_order_acquire/release` for updates.\n\n**Linearization Points**: These are the specific atomic operations where logical state changes become visible. For `push`, the linearization point is the successful `compare_exchange_weak` of the tail pointer. For `pop`, it is the successful `compare_exchange_weak` of the head pointer. These points guarantee that operations appear atomic to other threads.\n\n**Memory Ordering**: `memory_order_relaxed` suffices for pointer updates because the atomic operation itself provides the necessary synchronization via the CAS loop. However, the data payload must be protected. A common pattern involves a `std::atomic<bool>` flag per slot or using `memory_order_seq_cst` for the payload write/read to ensure visibility without explicit fences, though `acquire/release` on the head/tail updates is often sufficient if the payload access is strictly ordered relative to the pointer update.\n\n**ABA Prevention**: Naive CAS on head/tail pointers fails if a value is popped and overwritten (A→B→A). Solutions include hazard pointers, epoch-based reclamation, or storing a generation counter alongside the pointer (e.g., `uint64_t` where high bits are the pointer and low bits are the generation).\n\n**Wraparound**: The ring buffer must handle index overflow. Using a power-of-two size allows bitwise masking (`& (SIZE-1)`), but the head/tail pointers themselves must not wrap modulo the size; they must grow monotonically to prevent ABA.\n\n**Adversarial Interleaving**: Consider a naive implementation where `pop` reads the current head, then reads the data, then updates the head. If Thread A reads head=0, Thread B pushes to slot 0, Thread A reads stale data, and Thread C pushes to slot 0 again, Thread A might read garbage or overwrite valid data. More critically, if `pop` updates head before ensuring the next slot is free, a \"hole\" can be created, causing subsequent pushes to overwrite unread data.\n\n**Safety vs. Progress**: Safety ensures no two threads see inconsistent states (guaranteed by correct CAS usage). Lock-free progress ensures at least one thread makes progress even if others stall. A queue can be safe but not lock-free if a specific thread configuration causes a livelock (e.g., all threads spinning on the same slot due to poor reclamation). We assert safety based on the atomic guarantees of C++20, but proving strict lock-freedom requires analyzing all possible interleavings of CAS failures, which is non-trivial without formal verification."
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b",
+      "judge_calls": [
+        {
+          "model": "qwen/qwen3-30b-a3b-instruct-2507",
+          "status": 200,
+          "elapsed_s": 11.325,
+          "finish_reason": "stop",
+          "verdict": {
+            "capability_boundary": "supported",
+            "crux": "The task requires implementing a lock-free, bounded MPMC queue using only atomics, with correct memory ordering, ABA prevention, and wraparound handling—demanding precise synchronization and correctness under adversarial interleavings.",
+            "p_solve": 0.85,
+            "primary_rule": "SUP-4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "algorithm",
+      "status": 200,
+      "elapsed_s": 15.757,
+      "model": "qwen/qwen3.5-9b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Run the Floyd-Warshall algorithm on the $n$-vertex graph to compute all-pairs shortest paths. Initialize $D[i][j] = w(i,j)$ if an edge exists, $0$ if $i=j$, and $+\\infty$ otherwise. After $n$ iterations, if $D[i][i] < 0$ for any vertex $i$, a negative cycle exists reachable from $i$.\n\nTo classify distances:\n1.  **Finite**: $D[u][v]$ is finite and $u$ cannot reach any negative cycle.\n2.  **$-\\infty$**: $u$ can reach a negative cycle $C$, and $C$ can reach $v$. The path length can be arbitrarily small by traversing $C$ repeatedly.\n3.  **$+\\infty$**: $v$ is unreachable from $u$.\n\n**Algorithm Refinement**:\nFirst, identify all vertices $r$ involved in negative cycles (where $D[r][r] < 0$). Compute the transitive closure $R$ of the graph restricted to these vertices. A pair $(u,v)$ has distance $-\\infty$ if $u$ reaches some $r$ (where $D[u][r] < \\infty$) and $r$ reaches $v$ (i.e., $R[r][v]$ is true). If $u$ reaches $v$ but not via a negative cycle, the distance is the finite $D[u][v]$. If $v$ is unreachable, it is $+\\infty$.\n\n**Correctness**: Floyd-Warshall correctly computes shortest paths in the absence of negative cycles. If a negative cycle exists, any path utilizing it can be shortened indefinitely. The condition \"reachable from $u$ and can reach $v$\" precisely captures the ability to loop infinitely to reduce cost.\n\n**Complexity**:\n*   **Time**: $O(n^3)$ for Floyd-Warshall plus $O(n^3)$ for transitive closure or reachability checks. Total: $O(n^3)$.\n*   **Space**: $O(n^2)$ to store the distance matrix and reachability matrix.\n\nThis approach efficiently handles negative weights and cycles, distinguishing between finite, unbounded negative, and unreachable cases."
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-9b",
+      "judge_calls": [
+        {
+          "model": "qwen/qwen3-30b-a3b-instruct-2507",
+          "status": 200,
+          "elapsed_s": 11.851,
+          "finish_reason": "stop",
+          "verdict": {
+            "capability_boundary": "supported",
+            "crux": "The task requires determining shortest-path distances for all pairs in a directed graph with potentially negative edge weights, including detecting negative cycles that lead to -infinity distances. This demands a complete and deterministic algorithmic solution with verifiable correctness via a representative harness.",
+            "p_solve": 0.95,
+            "primary_rule": "SUP-4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "algorithm_big_baseline",
+      "status": 200,
+      "elapsed_s": 14.0,
+      "model": "qwen/qwen3.5-397b-a17b",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "To determine the shortest-path distance status for all pairs $(u, v)$ in a directed graph with integer weights (possibly negative), use the **Floyd-Warshall algorithm** followed by a propagation step.\n\n**Algorithm:**\n1.  Initialize an $N \\times N$ matrix $D$ where $D[u][v]$ is the edge weight if $(u,v)$ exists, $0$ if $u=v$, and $\\infty$ otherwise.\n2.  Run Floyd-Warshall: For each intermediate node $k$, update $D[u][v] = \\min(D[u][v], D[u][k] + D[k][v])$.\n3.  Identify nodes involved in negative cycles: A node $i$ is part of or reachable from a negative cycle if $D[i][i] < 0$.\n4.  Propagate $-\\infty$: For every pair $(u, v)$, if there exists a node $k$ such that $D[u][k] < \\infty$, $D[k][v] < \\infty$, and $D[k][k] < 0$, then the distance from $u$ to $v$ is $-\\infty$. Otherwise, if $D[u][v] = \\infty$, the distance is $+\\infty$; else, it is the finite value $D[u][v]$.\n\n**Effect of Negative Cycles:**\nIf a path from $u$ to $v$ can traverse a negative cycle, the path length can be arbitrarily reduced by looping. Thus, the shortest distance becomes $-\\infty$. This occurs specifically when $u$ can reach a node $k$ on a negative cycle, and $k$ can reach $v$.\n\n**Correctness Justification:**\nFloyd-Warshall correctly computes shortest simple paths or detects negative cycles via diagonal entries ($D[k][k] < 0$). If a path includes a negative cycle, the relaxation process ensures $D[k][k]$ becomes negative. The propagation step correctly identifies all pairs $(u, v)$ where a valid path exists that includes such a cycle, marking them $-\\infty$. Pairs with no path remain $\\infty$.\n\n**Complexity Analysis:**\n*   **Time:** $O(V^3)$. The triple nested loops of Floyd-Warshall dominate. The propagation step is also $O(V^3)$ in the worst case (checking all $k$ for all pairs), though often optimized to $O(V^3)$ total.\n*   **Space:** $O(V^2)$ to store the distance matrix.\n\nThis approach handles all cases: finite paths, unreachable pairs ($+\\infty$), and unbounded minimization ($-\\infty$)."
+        }
+      ],
+      "finish_reasons": [
+        "stop"
+      ],
+      "selected_model_header": "qwen/qwen3.5-397b-a17b"
+    }
+  ],
+  "tool_loop": {
+    "passed": true,
+    "classifier_calls": 1,
+    "calls": [
+      {
+        "status": 200,
+        "elapsed_s": 19.679,
+        "model": "qwen/qwen3.5-397b-a17b",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": null,
+            "refusal": null,
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "id": "chatcmpl-tool-99cd99c48613e28b",
+                "function": {
+                  "name": "lookup",
+                  "arguments": "{\"key\": \"demo\"}"
+                }
+              }
+            ]
+          }
+        ],
+        "finish_reasons": [
+          "tool_calls"
+        ],
+        "selected_model_header": "qwen/qwen3.5-397b-a17b"
+      },
+      {
+        "status": 200,
+        "elapsed_s": 1.338,
+        "model": "qwen/qwen3.5-397b-a17b",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "READY"
+          }
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "selected_model_header": "qwen/qwen3.5-397b-a17b"
+      }
+    ]
+  },
+  "network_control": {
+    "method": "Three sequential fresh TLS connections from the Docker probe container; authenticated lightweight GET /api/v1/key; no inference calls. These include edge/API processing and do not measure OpenRouter-to-inference-provider delay.",
+    "samples": [
+      {
+        "status": 200,
+        "dns_tcp_tls_ms": 320.93,
+        "request_to_headers_ms": 255.54,
+        "total_ms": 576.61
+      },
+      {
+        "status": 200,
+        "dns_tcp_tls_ms": 308.27,
+        "request_to_headers_ms": 171.94,
+        "total_ms": 480.44
+      },
+      {
+        "status": 200,
+        "dns_tcp_tls_ms": 293.97,
+        "request_to_headers_ms": 165.35,
+        "total_ms": 459.52
+      }
+    ]
+  },
+  "threshold_replay": {
+    "method": "Offline policy replay of recorded verdicts, not a new classifier or answer-quality evaluation.",
+    "policies": {
+      "current": [
+        0.75,
+        0.1
+      ],
+      "stricter_candidate": [
+        0.97,
+        0.01
+      ]
+    },
+    "cases": [
+      {
+        "case": "chinese",
+        "p_solve": 1.0,
+        "boundary": "supported",
+        "current": "small",
+        "stricter_candidate": "small"
+      },
+      {
+        "case": "concurrency",
+        "p_solve": 0.85,
+        "boundary": "supported",
+        "current": "small",
+        "stricter_candidate": "big"
+      },
+      {
+        "case": "algorithm",
+        "p_solve": 0.95,
+        "boundary": "supported",
+        "current": "small",
+        "stricter_candidate": "big"
+      }
+    ]
+  },
+  "approximate_observed_cost_usd": 0.00573,
+  "cost_note": "Observed account usage delta rounded; excludes early preflight; delayed reporting or other account activity can affect this estimate."
+}

@@ -1,0 +1,47 @@
+name: bifrost-switchyard-experiment
+services:
+  switchyard:
+    build:
+      context: .
+      dockerfile: Dockerfile.switchyard
+    image: bifrost-switchyard:64def5647b71
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'export OPENROUTER_API_KEY="$$(cat /run/secrets/openrouter_api_key)"; exec switchyard-server --config /etc/switchyard/routes.toml --host 0.0.0.0 --port 4000 --routing-log-file /tmp/routing.jsonl'
+    secrets: [openrouter_api_key]
+    volumes:
+      - ./routes.toml:/etc/switchyard/routes.toml:ro
+    ports: ["127.0.0.1:14000:4000"]
+  bifrost:
+    build:
+      context: ../../..
+      dockerfile: examples/configs/withswitchyard/Dockerfile.bifrost
+    image: bifrost:switchyard-experiment
+    volumes:
+      - ./config.json:/app/data/config.json:ro
+      - ./catalog.json:/app/data/catalog.json:ro
+    ports: ["127.0.0.1:18473:8080"]
+    depends_on: [switchyard]
+  probe:
+    image: python:3.12-slim
+    profiles: ["test"]
+    working_dir: /experiment
+    volumes:
+      - .:/experiment
+    secrets: [openrouter_api_key]
+    entrypoint: ["python"]
+  mock:
+    image: python:3.12-slim
+    profiles: ["test"]
+    volumes:
+      - ./mock.py:/mock.py:ro
+    command: ["python", "/mock.py"]
+  judge-recorder:
+    image: python:3.12-slim
+    profiles: ["test"]
+    volumes:
+      - ./judge_recorder.py:/recorder.py:ro
+    command: ["python", "/recorder.py"]
+secrets:
+  openrouter_api_key:
+    file: ${OPENROUTER_KEY_FILE:?Set OPENROUTER_KEY_FILE to an external key file}

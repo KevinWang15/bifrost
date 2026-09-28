@@ -1,0 +1,23 @@
+# API-only experiment build. Uses the checkout's Go modules; does not build the UI.
+FROM golang:1.27.0-bookworm AS builder
+WORKDIR /build
+COPY core ./core
+COPY framework ./framework
+COPY plugins ./plugins
+COPY transports ./transports
+RUN go work init ./core ./framework ./transports \
+    && for module in plugins/*/go.mod; do go work use "${module%/go.mod}"; done
+RUN mkdir -p transports/bifrost-http/ui \
+    && printf '%s' 'Bifrost Switchyard API experiment' > transports/bifrost-http/ui/index.html
+WORKDIR /build/transports
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -p 6 -trimpath -ldflags='-s -w -X main.Version=switchyard-experiment' \
+    -o /bifrost ./bifrost-http
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/data && chown 1000:1000 /app/data
+COPY --from=builder /bifrost /usr/local/bin/bifrost
+USER 1000:1000
+ENTRYPOINT ["bifrost", "-host", "0.0.0.0", "-port", "8080", "-app-dir", "/app/data"]

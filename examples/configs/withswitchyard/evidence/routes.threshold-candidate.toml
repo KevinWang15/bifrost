@@ -1,0 +1,94 @@
+schema_version = 1
+
+[llm_clients.judge]
+format = "openai_chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_ms = 60000
+max_retries = 0
+
+[llm_clients.answers]
+format = "openai_chat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_ms = 120000
+max_retries = 0
+
+[targets.judge]
+id = "qwen/qwen3-30b-a3b-instruct-2507"
+llm_client = "judge"
+
+[targets.small]
+id = "qwen/qwen3.5-9b"
+llm_client = "answers"
+extra_body = { reasoning = { enabled = false } }
+
+[targets.big]
+id = "qwen/qwen3.5-397b-a17b"
+llm_client = "answers"
+extra_body = { reasoning = { enabled = false } }
+
+[routes.smart]
+id = "smart"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "judge"
+strong_target = "big"
+weak_target = "small"
+base_threshold = 0.97
+threshold_step = 0.01
+classify_trigger = "user_turn"
+recent_turn_window = 6
+max_output_tokens = 512
+response_format_type = "json_schema"
+
+[routes.test_big]
+id = "test-big"
+type = "passthrough"
+target = "mock_big"
+
+[routes.small]
+id = "small"
+type = "passthrough"
+target = "small"
+
+[routes.big]
+id = "big"
+type = "passthrough"
+target = "big"
+
+[routes.noop]
+id = "noop"
+type = "noop"
+
+# Deterministic integration probes. This client is local and makes no paid calls.
+[llm_clients.mock]
+format = "openai_chat"
+base_url = "http://mock:9000/v1"
+timeout_ms = 2000
+max_retries = 0
+
+[targets.mock_judge]
+id = "mock-judge"
+llm_client = "mock"
+
+[targets.mock_small]
+id = "mock-small"
+llm_client = "mock"
+
+[targets.mock_big]
+id = "mock-big"
+llm_client = "mock"
+
+[routes.test]
+id = "test"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "mock_judge"
+strong_target = "mock_big"
+weak_target = "mock_small"
+base_threshold = 0.75
+threshold_step = 0.10
+classify_trigger = "user_turn"
+recent_turn_window = 6
+max_output_tokens = 512

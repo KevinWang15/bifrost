@@ -1,0 +1,4 @@
+services:
+  switchyard:
+    volumes:
+      - ./results/routes.observe.toml:/etc/switchyard/routes.toml:ro

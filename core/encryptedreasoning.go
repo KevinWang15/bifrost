@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strings"
 
-	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 	schemas "github.com/maximhq/bifrost/core/schemas"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -293,14 +292,14 @@ func encryptedReasoningCarriers(req *schemas.BifrostRequest) (input *[]schemas.R
 //     `thinking` block"). Handling only the Responses shape handed that 400 straight
 //     to the client -- isEncryptedReasoningRejection already recognised the refusal,
 //     but the strip it gates returned false, so no retry ever happened.
-func stripUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.BifrostRequest) bool {
+func stripUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.BifrostRequest, selectPayload reasoningPayloadSelector) bool {
 	if req == nil {
 		return false
 	}
 	if req.ChatRequest != nil {
-		return stripChatUnverifiableReasoning(ctx, req.ChatRequest)
+		return stripChatUnverifiableReasoning(ctx, req.ChatRequest, selectPayload)
 	}
-	return stripResponsesEncryptedContent(ctx, req)
+	return stripResponsesEncryptedContent(ctx, req, selectPayload)
 }
 
 // stripChatUnverifiableReasoning clears signatures and encrypted payloads from every
@@ -313,7 +312,7 @@ func stripUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bifros
 // The caller's slice and structs are shared with plugins and the transport layer, so
 // the rewrite builds new slices and clones each message it touches rather than
 // mutating in place.
-func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.BifrostChatRequest) bool {
+func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.BifrostChatRequest, selectPayload reasoningPayloadSelector) bool {
 	if req == nil || len(req.Input) == 0 {
 		return false
 	}
@@ -339,7 +338,7 @@ func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bi
 			// field paths there would corrupt the request, and nothing shows it produces
 			// this refusal, so it keeps the truthful false.
 			if integrationType, _ := ctx.Value(schemas.BifrostContextKeyIntegrationType).(string); integrationType == "anthropic" {
-				return stripRawAnthropicChatThinking(&req.RawRequestBody)
+				return stripRawAnthropicChatThinking(&req.RawRequestBody, selectPayload)
 			}
 			return false
 		}
@@ -366,7 +365,7 @@ func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bi
 				if id == nil {
 					continue
 				}
-				base := providerUtils.StripThoughtSignature(*id)
+				base := stripReasoningCallID(*id, selectPayload)
 				if base == *id {
 					continue
 				}
@@ -384,7 +383,7 @@ func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bi
 			}
 		}
 		if tool := rewritten[i].ChatToolMessage; tool != nil && tool.ToolCallID != nil {
-			if base := providerUtils.StripThoughtSignature(*tool.ToolCallID); base != *tool.ToolCallID {
+			if base := stripReasoningCallID(*tool.ToolCallID, selectPayload); base != *tool.ToolCallID {
 				toolCopy := *tool
 				toolCopy.ToolCallID = &base
 				rewritten[i].ChatToolMessage = &toolCopy
@@ -396,9 +395,9 @@ func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bi
 		if assistant == nil || len(assistant.ReasoningDetails) == 0 {
 			continue
 		}
-		details, detailsChanged := stripChatReasoningDetails(assistant.ReasoningDetails)
+		details, detailsChanged := stripChatReasoningDetails(assistant.ReasoningDetails, selectPayload)
 		if dropWhole {
-			details, detailsChanged = dropChatReasoningDetails(assistant.ReasoningDetails)
+			details, detailsChanged = dropChatReasoningDetails(assistant.ReasoningDetails, selectPayload)
 		}
 		if !detailsChanged {
 			continue
@@ -419,12 +418,12 @@ func stripChatUnverifiableReasoning(ctx *schemas.BifrostContext, req *schemas.Bi
 // stripChatReasoningDetails returns the details with every signature and encrypted
 // payload removed, and whether anything was removed. Details left with neither text
 // nor summary are dropped rather than forwarded as empty shells.
-func stripChatReasoningDetails(details []schemas.ChatReasoningDetails) ([]schemas.ChatReasoningDetails, bool) {
+func stripChatReasoningDetails(details []schemas.ChatReasoningDetails, selectPayload reasoningPayloadSelector) ([]schemas.ChatReasoningDetails, bool) {
 	changed := false
 	kept := make([]schemas.ChatReasoningDetails, 0, len(details))
 	// detail is the loop's copy, so clearing its fields leaves the caller's slice alone.
 	for _, detail := range details {
-		if detail.Signature == nil && detail.Data == nil {
+		if !selectReasoningPayload(selectPayload, detail.Signature, detail.Data) {
 			kept = append(kept, detail)
 			continue
 		}
@@ -446,11 +445,11 @@ func stripChatReasoningDetails(details []schemas.ChatReasoningDetails) ([]schema
 // payload, reporting whether any were removed. Unlike stripChatReasoningDetails the
 // text does not survive: on Anthropic it is the thinking prose the refused signature
 // signed, and replaying it without a valid signature is itself a 400.
-func dropChatReasoningDetails(details []schemas.ChatReasoningDetails) ([]schemas.ChatReasoningDetails, bool) {
+func dropChatReasoningDetails(details []schemas.ChatReasoningDetails, selectPayload reasoningPayloadSelector) ([]schemas.ChatReasoningDetails, bool) {
 	kept := make([]schemas.ChatReasoningDetails, 0, len(details))
 	changed := false
 	for _, detail := range details {
-		if detail.Signature != nil || detail.Data != nil {
+		if selectReasoningPayload(selectPayload, detail.Signature, detail.Data) {
 			changed = true
 			continue
 		}
@@ -491,14 +490,14 @@ func dropsWholeReasoningBlocks(ctx *schemas.BifrostContext, model string) bool {
 
 // dropReasoningContentBlocks removes every reasoning content block that carries an
 // unverifiable payload, reporting whether any were removed.
-func dropReasoningContentBlocks(content *schemas.ResponsesMessageContent) ([]schemas.ResponsesMessageContentBlock, bool) {
+func dropReasoningContentBlocks(content *schemas.ResponsesMessageContent, selectPayload reasoningPayloadSelector) ([]schemas.ResponsesMessageContentBlock, bool) {
 	if content == nil || len(content.ContentBlocks) == 0 {
 		return nil, false
 	}
 	kept := make([]schemas.ResponsesMessageContentBlock, 0, len(content.ContentBlocks))
 	changed := false
 	for _, block := range content.ContentBlocks {
-		if block.Signature != nil || block.EncryptedContent != nil {
+		if selectReasoningPayload(selectPayload, block.Signature, block.EncryptedContent) {
 			changed = true
 			continue
 		}
@@ -531,7 +530,7 @@ func dropReasoningContentBlocks(content *schemas.ResponsesMessageContent) ([]sch
 // rejects an empty array, and dropping the message would break user/assistant alternation.
 // That turn keeps its unverifiable block and the retry will fail again -- but only when the
 // assistant turn was redacted-only, and reporting a change that cannot help is worse.
-func stripRawAnthropicChatThinking(rawBody *[]byte) bool {
+func stripRawAnthropicChatThinking(rawBody *[]byte, selectPayload reasoningPayloadSelector) bool {
 	if rawBody == nil || len(*rawBody) == 0 {
 		return false
 	}
@@ -570,10 +569,13 @@ func stripRawAnthropicChatThinking(rawBody *[]byte) bool {
 		for _, block := range blocks {
 			switch block.Get("type").String() {
 			case "redacted_thinking":
+				if !selectReasoningPayload(selectPayload, schemas.Ptr(block.Get("data").String())) {
+					break
+				}
 				messageChanged = true
 				continue
 			case "thinking":
-				if !block.Get("signature").Exists() {
+				if !block.Get("signature").Exists() || !selectReasoningPayload(selectPayload, schemas.Ptr(block.Get("signature").String())) {
 					break
 				}
 				messageChanged = true
@@ -629,7 +631,7 @@ func joinRawJSONArray(parts [][]byte, sizeHint int) []byte {
 // carries its signature here rather than on the reasoning item, so clearing the
 // reasoning item's encrypted_content alone left the unverifiable half in place; the
 // block models encrypted_content too, so a block-only ciphertext survived the same way.
-func stripContentBlockReasoningPayloads(content *schemas.ResponsesMessageContent) ([]schemas.ResponsesMessageContentBlock, bool) {
+func stripContentBlockReasoningPayloads(content *schemas.ResponsesMessageContent, selectPayload reasoningPayloadSelector) ([]schemas.ResponsesMessageContentBlock, bool) {
 	if content == nil || len(content.ContentBlocks) == 0 {
 		return nil, false
 	}
@@ -637,11 +639,11 @@ func stripContentBlockReasoningPayloads(content *schemas.ResponsesMessageContent
 	copy(blocks, content.ContentBlocks)
 	changed := false
 	for i := range blocks {
-		if blocks[i].Signature != nil {
+		if selectReasoningPayload(selectPayload, blocks[i].Signature) {
 			blocks[i].Signature = nil
 			changed = true
 		}
-		if blocks[i].EncryptedContent != nil {
+		if selectReasoningPayload(selectPayload, blocks[i].EncryptedContent) {
 			blocks[i].EncryptedContent = nil
 			changed = true
 		}
@@ -674,7 +676,7 @@ func stripContentBlockReasoningPayloads(content *schemas.ResponsesMessageContent
 // Large-payload mode is the one case that returns false with work left undone: the
 // body streams straight from a reader that core never parsed and cannot rewrite, so
 // claiming a change would buy a second identical upstream call.
-func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.BifrostRequest) bool {
+func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.BifrostRequest, selectPayload reasoningPayloadSelector) bool {
 	inputRef, rawBodyRef := encryptedReasoningCarriers(req)
 	if inputRef == nil {
 		return false
@@ -696,7 +698,7 @@ func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.Bi
 			return false
 		}
 		if useRawBody, ok := ctx.Value(schemas.BifrostContextKeyUseRawRequestBody).(bool); ok && useRawBody {
-			return stripRawResponsesEncryptedContent(rawBodyRef, dropItemIDs)
+			return stripRawResponsesEncryptedContent(rawBodyRef, dropItemIDs, selectPayload)
 		}
 	}
 
@@ -737,12 +739,12 @@ func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.Bi
 		// appended here rather than routed through the survival check below.
 		if message.ResponsesToolMessage != nil && message.ResponsesToolMessage.CallID != nil {
 			callID := *message.ResponsesToolMessage.CallID
-			if base := providerUtils.StripThoughtSignature(callID); base != callID {
+			if base := stripReasoningCallID(callID, selectPayload); base != callID {
 				toolCopy := *message.ResponsesToolMessage
 				toolCopy.CallID = &base
 				message.ResponsesToolMessage = &toolCopy
 				if message.ID != nil {
-					if baseID := providerUtils.StripThoughtSignature(*message.ID); baseID != *message.ID {
+					if baseID := stripReasoningCallID(*message.ID, selectPayload); baseID != *message.ID {
 						message.ID = &baseID
 					}
 				}
@@ -752,7 +754,7 @@ func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.Bi
 			}
 		}
 
-		if message.ResponsesReasoning != nil && message.ResponsesReasoning.EncryptedContent != nil {
+		if message.ResponsesReasoning != nil && selectReasoningPayload(selectPayload, message.ResponsesReasoning.EncryptedContent) {
 			reasoningCopy := *message.ResponsesReasoning
 			reasoningCopy.EncryptedContent = nil
 			if dropWhole {
@@ -767,9 +769,9 @@ func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.Bi
 
 		// A thinking signature rides on the content block rather than the reasoning
 		// item, so a message can need the strip with encrypted_content already absent.
-		blocks, ok := stripContentBlockReasoningPayloads(message.Content)
+		blocks, ok := stripContentBlockReasoningPayloads(message.Content, selectPayload)
 		if dropWhole {
-			blocks, ok = dropReasoningContentBlocks(message.Content)
+			blocks, ok = dropReasoningContentBlocks(message.Content, selectPayload)
 		}
 		if ok {
 			contentCopy := *message.Content
@@ -822,7 +824,7 @@ func stripResponsesEncryptedContent(ctx *schemas.BifrostContext, req *schemas.Bi
 // Bifrost's schema does not model are not lost on the way through.
 //
 // dropItemIDs carries the caller's shape decision, described at its assignment.
-func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool) bool {
+func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool, selectPayload reasoningPayloadSelector) bool {
 	if rawBody == nil {
 		return false
 	}
@@ -846,14 +848,14 @@ func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool) bool {
 		// reasoning field. Rewritten in place and appended directly, since a tool item can
 		// never be an emptied reasoning item.
 		if callID := gjson.Get(rest, "call_id"); callID.Type == gjson.String {
-			if base := providerUtils.StripThoughtSignature(callID.Str); base != callID.Str {
+			if base := stripReasoningCallID(callID.Str, selectPayload); base != callID.Str {
 				updated, err := sjson.Set(rest, "call_id", base)
 				if err != nil {
 					items = append(items, item.Raw)
 					continue
 				}
 				if itemID := gjson.Get(updated, "id"); itemID.Type == gjson.String {
-					if baseID := providerUtils.StripThoughtSignature(itemID.Str); baseID != itemID.Str {
+					if baseID := stripReasoningCallID(itemID.Str, selectPayload); baseID != itemID.Str {
 						if withID, err := sjson.Set(updated, "id", baseID); err == nil {
 							updated = withID
 						}
@@ -865,7 +867,7 @@ func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool) bool {
 			}
 		}
 
-		if gjson.Get(rest, "encrypted_content").Exists() {
+		if payload := gjson.Get(rest, "encrypted_content"); payload.Exists() && selectReasoningPayload(selectPayload, schemas.Ptr(payload.String())) {
 			updated, err := sjson.Delete(rest, "encrypted_content")
 			if err != nil {
 				// Leave the item untouched rather than corrupting it; the retry still
@@ -895,7 +897,7 @@ func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool) bool {
 			for _, block := range contentResult.Array() {
 				blockRaw := []byte(block.Raw)
 				for _, field := range contentBlockReasoningCarriers {
-					if !gjson.GetBytes(blockRaw, field).Exists() {
+					if payload := gjson.GetBytes(blockRaw, field); !payload.Exists() || !selectReasoningPayload(selectPayload, schemas.Ptr(payload.String())) {
 						continue
 					}
 					updated, err := sjson.DeleteBytes(blockRaw, field)

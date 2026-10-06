@@ -1,0 +1,27 @@
+{
+  "$schema": "/schema/config.schema.json",
+  "setup_token": "local-reasoning-cache-setup",
+  "client": {"enforce_auth_on_inference": false, "enable_logging": false, "disable_content_logging": true},
+  "providers": {
+    "provider-a": {
+      "keys": [{"name": "key-A", "value": "local-A", "models": ["*"], "weight": 1}],
+      "custom_provider_config": {"base_provider_type": "openai"},
+      "network_config": {"base_url": "http://providers:9000/a", "max_retries": 0, "allow_private_network": true}
+    },
+    "provider-b": {
+      "keys": [{"name": "key-B", "value": "local-B", "models": ["*"], "weight": 1}],
+      "custom_provider_config": {"base_provider_type": "openai"},
+      "network_config": {"base_url": "http://providers:9000/b", "max_retries": 0, "allow_private_network": true}
+    },
+    "anthropic": {
+      "keys": [{"name": "key-Claude-B", "value": "local-Claude-B", "models": ["*"], "weight": 1}],
+      "network_config": {"base_url": "http://providers:9000/anthropic", "max_retries": 0, "allow_private_network": true}
+    }
+  },
+  "governance": {
+    "routing_rules": [{"id": "local-switch", "name": "Switch to B", "enabled": true, "scope": "global", "priority": 0,
+      "cel_expression": "'x-test-route' in headers && headers['x-test-route'] == 'b'",
+      "targets": [{"provider": "provider-b", "model": "gpt-5.6-sol", "weight": 1}]
+    }]
+  }
+}

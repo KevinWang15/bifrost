@@ -5,6 +5,7 @@ package bifrost
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
@@ -129,6 +130,7 @@ type Bifrost struct {
 	keyPoolFilter       schemas.KeyPoolFilter               // optional hook to veto keys before selection (nil = all eligible)
 	kvStore             schemas.KVStore                     // optional KV store for session stickiness (nil = disabled)
 	sessionAffinity     schemas.SessionAffinity             // decides which key a session stays on; never nil after Init
+	reasoningRejections reasoningRejectionCache             // successful reasoning rewrites, scoped to the upstream identity
 }
 
 // ProviderQueue wraps a provider's request channel with lifecycle management
@@ -6304,8 +6306,19 @@ func executeRequestWithRetries[T any](
 	model string,
 	req *schemas.BifrostRequest,
 	logger schemas.Logger,
+	rejectionCache *reasoningRejectionCache,
 ) (result T, bifrostError *schemas.BifrostError) {
 	var attempts int
+	if rejectionCache != nil && !hasReplayableReasoning(ctx, req) {
+		rejectionCache = nil
+	}
+	var recoveryScope [32]byte
+	var recoveryTokens map[[32]byte]struct{}
+	var restoreReasoning func()
+	var lastReasoningScope [32]byte
+	if rejectionCache != nil {
+		restoreReasoning = detachReasoningCarriers(req)
+	}
 	isStreamRequest := IsStreamRequestType(requestType)
 	// Whether the previous attempt buffered startup events; its stream-end
 	// markers must be cleared before the next attempt reads a fresh stream.
@@ -6651,6 +6664,25 @@ func executeRequestWithRetries[T any](
 		}
 
 		// Attempt the request
+		if rejectionCache != nil && (rejectionCache.active.Load() || len(recoveryTokens) > 0) {
+			if scope, ok := reasoningRejectionScope(ctx, config, providerKey, model, currentKey); ok {
+				if attempts > 0 && scope != lastReasoningScope {
+					restoreReasoning()
+					recoveryTokens = nil
+				}
+				lastReasoningScope = scope
+				// Match the resolved model's block-removal policy before dispatch.
+				if alias := currentKey.Aliases.ResolveConfig(model); alias != nil {
+					ctx.SetValue(schemas.BifrostContextKeyResolvedAlias, &schemas.ResolvedAlias{Key: model, Config: alias})
+					if req != nil {
+						req.SetModel(alias.ModelID)
+					}
+				}
+				if rejectionCache.active.Load() && stripUnverifiableReasoning(ctx, req, func(payload string) bool { return rejectionCache.contains(scope, payload) }) {
+					ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Removed previously rejected reasoning from the request to %s/%s before dispatch", providerKey, model))
+				}
+			}
+		}
 		result, bifrostError = requestHandler(currentKey)
 
 		// Detect errors carried inside HTTP 200 streams before returning success.
@@ -6769,6 +6801,15 @@ func executeRequestWithRetries[T any](
 		}
 
 		logger.Debug("request %s for provider %s completed", requestType, providerKey)
+		if bifrostError == nil && !emptyStream && len(recoveryTokens) > 0 {
+			if scope, ok := reasoningRejectionScope(ctx, config, providerKey, model, currentKey); ok && scope == recoveryScope {
+				if stream, ok := any(result).(chan *schemas.BifrostStreamChunk); ok && stream != nil {
+					result = any(rememberReasoningStream(ctx, stream, rejectionCache, scope, recoveryTokens)).(T)
+				} else {
+					rejectionCache.remember(scope, recoveryTokens)
+				}
+			}
+		}
 
 		// Check if successful or if we should retry
 		if bifrostError == nil ||
@@ -6840,8 +6881,22 @@ func executeRequestWithRetries[T any](
 		// returns false when there is nothing to strip, so the extra attempt is spent
 		// only on requests that carry a token. Runs once per request.
 		lastWasEncryptedContentStrip = false
+		var collectTokens reasoningPayloadSelector
+		if rejectionCache != nil && !shouldRetry && !strippedEncryptedContent && shouldStripReasoningAfterClientError(bifrostError) && canRememberReasoningRejection(bifrostError) {
+			if scope, ok := reasoningRejectionScope(ctx, config, providerKey, model, currentKey); ok {
+				recoveryScope = scope
+				lastReasoningScope = scope
+				recoveryTokens = make(map[[32]byte]struct{})
+				collectTokens = func(payload string) bool {
+					if payload != "" && len(recoveryTokens) < reasoningRecoveryTokenLimit {
+						recoveryTokens[sha256.Sum256([]byte(payload))] = struct{}{}
+					}
+					return true
+				}
+			}
+		}
 		if !shouldRetry && !strippedEncryptedContent && shouldStripReasoningAfterClientError(bifrostError) &&
-			stripUnverifiableReasoning(ctx, req) {
+			stripUnverifiableReasoning(ctx, req, collectTokens) {
 			strippedEncryptedContent = true
 			lastWasEncryptedContentStrip = true
 			extraAttempts++
@@ -7458,7 +7513,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 					})
 				}
 				return streamCh, streamErr
-			}, keyProvider, req.RequestType, provider.GetProviderKey(), model, &req.BifrostRequest, bifrost.logger)
+			}, keyProvider, req.RequestType, provider.GetProviderKey(), model, &req.BifrostRequest, bifrost.logger, &bifrost.reasoningRejections)
 		} else {
 			result, bifrostError = executeRequestWithRetries(req.Context, config, func(k schemas.Key) (*schemas.BifrostResponse, *schemas.BifrostError) {
 				if aliasConfig := k.Aliases.ResolveConfig(originalModelRequested); aliasConfig != nil {
@@ -7476,7 +7531,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 				applyRawCaptureSignals(req.Context, config)
 				attemptRoutingInfo = schemas.BuildRoutingInfo(req.Context, provider.GetProviderKey(), originalModelRequested, k)
 				return bifrost.handleProviderRequest(provider, config, req, k, keys)
-			}, keyProvider, req.RequestType, provider.GetProviderKey(), model, &req.BifrostRequest, bifrost.logger)
+			}, keyProvider, req.RequestType, provider.GetProviderKey(), model, &req.BifrostRequest, bifrost.logger, &bifrost.reasoningRejections)
 		}
 
 		// For streaming with an error, route release through the LAST attempt's

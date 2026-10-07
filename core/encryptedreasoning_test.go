@@ -3,6 +3,7 @@ package bifrost
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,41 @@ func newEncryptedReasoningRequest(encrypted string) *schemas.BifrostRequest {
 				},
 			},
 		},
+	}
+}
+
+// Clients keep replaying their original history after a fail-soft retry. The
+// gateway must remember the successful rewrite, without discarding new reasoning
+// issued by the target upstream.
+func TestEncryptedReasoningCacheRepeatedHistory(t *testing.T) {
+	cache := &reasoningRejectionCache{}
+	for turn := 0; turn < 2; turn++ {
+		req := newEncryptedReasoningRequest("foreign_A")
+		if turn > 0 {
+			req.ResponsesRequest.Input = append(req.ResponsesRequest.Input, newEncryptedReasoningRequest("native_B").ResponsesRequest.Input[1])
+		}
+		original := req.ResponsesRequest
+		ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+		ctx.SetValue(schemas.BifrostContextKeyTracer, &schemas.NoOpTracer{})
+		attempts := 0
+		_, err := executeRequestWithRetries(ctx, createTestConfig(0, 0, 0), func(schemas.Key) (string, *schemas.BifrostError) {
+			attempts++
+			if req.ResponsesRequest.Input[1].ResponsesReasoning.EncryptedContent != nil {
+				return "", encryptedContentError()
+			}
+			return "ok", nil
+		}, nil, schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, NewDefaultLogger(schemas.LogLevelError), cache)
+		if err != nil || attempts != 2-turn {
+			t.Fatalf("turn %d: attempts=%d error=%v", turn, attempts, err)
+		}
+		if payload := original.Input[1].ResponsesReasoning.EncryptedContent; payload == nil || *payload != "foreign_A" {
+			t.Fatal("caller history was mutated")
+		}
+		if turn > 0 {
+			if payload := req.ResponsesRequest.Input[2].ResponsesReasoning.EncryptedContent; payload == nil || *payload != "native_B" {
+				t.Fatal("cached strip removed the new upstream's valid reasoning")
+			}
+		}
 	}
 }
 
@@ -111,7 +147,7 @@ func TestExecuteRequestWithRetries_StripsEncryptedContentAndRetries(t *testing.T
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger)
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil)
 
 	if err != nil {
 		t.Fatalf("expected the stripped retry to succeed, got %v", err)
@@ -304,7 +340,7 @@ func TestExecuteRequestWithRetries_HealsOnEveryProviderRejection(t *testing.T) {
 			}
 
 			result, err := executeRequestWithRetries(ctx, config, handler, nil,
-				schemas.ResponsesRequest, rejection.provider, rejection.model, req, logger)
+				schemas.ResponsesRequest, rejection.provider, rejection.model, req, logger, nil)
 
 			if err != nil {
 				t.Fatalf("expected the stripped retry to succeed, got %v", err)
@@ -354,7 +390,7 @@ func TestExecuteRequestWithRetries_EncryptedContentStripRetriesOnce(t *testing.T
 	}
 
 	_, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger)
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil)
 
 	if err == nil {
 		t.Fatal("expected the upstream error to be returned after the stripped retry also failed")
@@ -394,7 +430,7 @@ func TestExecuteRequestWithRetries_FailSoftRetrySkipsBackoff(t *testing.T) {
 
 	start := time.Now()
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger)
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -439,7 +475,7 @@ func TestExecuteRequestWithRetries_OrdinaryRetryPaysBackoff(t *testing.T) {
 
 	start := time.Now()
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger)
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -508,7 +544,7 @@ func TestExecuteRequestWithRetries_FailSoftAttemptCountsTowardRotationAccounting
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, keyProvider,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger)
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil)
 
 	if err != nil {
 		t.Fatalf("expected the rotated attempt to succeed, got %v", err)
@@ -559,7 +595,7 @@ func TestExecuteRequestWithRetries_NoStripWhenNothingEncrypted(t *testing.T) {
 	}
 
 	if _, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger); err == nil {
+		schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, logger, nil); err == nil {
 		t.Fatal("expected the upstream error to be returned")
 	}
 	if callCount != 1 {
@@ -572,7 +608,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 		req := newEncryptedReasoningRequest("ciphertext")
 		req.ResponsesRequest.Input[1].ResponsesReasoning.Summary = nil
 
-		if !stripResponsesEncryptedContent(nil, req) {
+		if !stripResponsesEncryptedContent(nil, req, nil) {
 			t.Fatal("expected the strip to report a change")
 		}
 		if len(req.ResponsesRequest.Input) != 1 {
@@ -593,7 +629,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 	t.Run("drops the item id from a surviving compaction reasoning item", func(t *testing.T) {
 		req := newEncryptedReasoningCompactionRequest("ciphertext")
 
-		if !stripResponsesEncryptedContent(nil, req) {
+		if !stripResponsesEncryptedContent(nil, req, nil) {
 			t.Fatal("expected the strip to report a change")
 		}
 		if len(req.CompactionRequest.Input) != 2 {
@@ -617,7 +653,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 			`{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"planning"}],"encrypted_content":"cipher"}` +
 			`]}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected the raw body to be rewritten")
 		}
 
@@ -643,7 +679,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 			`{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"planning"}],"encrypted_content":"cipher"}` +
 			`]}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected the raw body to be rewritten")
 		}
 		if body := string(req.ResponsesRequest.RawRequestBody); !strings.Contains(body, `"rs_1"`) {
@@ -655,7 +691,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 		req := newEncryptedReasoningRequest("ciphertext")
 		original := req.ResponsesRequest.Input[1].ResponsesReasoning
 
-		stripResponsesEncryptedContent(nil, req)
+		stripResponsesEncryptedContent(nil, req, nil)
 
 		if original.EncryptedContent == nil || *original.EncryptedContent != "ciphertext" {
 			t.Error("expected the original reasoning struct to be left untouched")
@@ -666,7 +702,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 		req := newEncryptedReasoningRequest("ciphertext")
 		req.ResponsesRequest.Input[1].ResponsesReasoning.EncryptedContent = nil
 
-		if stripResponsesEncryptedContent(nil, req) {
+		if stripResponsesEncryptedContent(nil, req, nil) {
 			t.Error("expected no change to be reported")
 		}
 	})
@@ -678,7 +714,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 	t.Run("strips a compaction request", func(t *testing.T) {
 		req := newEncryptedReasoningCompactionRequest("ciphertext")
 
-		if !stripResponsesEncryptedContent(nil, req) {
+		if !stripResponsesEncryptedContent(nil, req, nil) {
 			t.Fatal("expected the strip to report a change on a compaction request")
 		}
 		if len(req.CompactionRequest.Input) != 2 {
@@ -699,7 +735,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 			`{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"planning"}],"encrypted_content":"cipher"}` +
 			`]}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected the compaction raw body to be rewritten")
 		}
 		if body := string(req.CompactionRequest.RawRequestBody); strings.Contains(body, "encrypted_content") {
@@ -709,10 +745,10 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 
 	t.Run("ignores non-responses requests", func(t *testing.T) {
 		req := &schemas.BifrostRequest{RequestType: schemas.ChatCompletionRequest}
-		if stripResponsesEncryptedContent(nil, req) {
+		if stripResponsesEncryptedContent(nil, req, nil) {
 			t.Error("expected no change for a chat request")
 		}
-		if stripResponsesEncryptedContent(nil, nil) {
+		if stripResponsesEncryptedContent(nil, nil, nil) {
 			t.Error("expected no change for a nil request")
 		}
 	})
@@ -728,7 +764,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 			`{"type":"reasoning","id":"rs_2","summary":[],"encrypted_content":"cipher"}` +
 			`],"store":false}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected the raw body to be rewritten")
 		}
 
@@ -752,7 +788,7 @@ func TestStripResponsesEncryptedContent(t *testing.T) {
 		ctx.SetValue(schemas.BifrostContextKeyLargePayloadMode, true)
 
 		req := newEncryptedReasoningRequest("ciphertext")
-		if stripResponsesEncryptedContent(ctx, req) {
+		if stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Error("expected no change to be claimed when the body streams past core unparsed")
 		}
 		if req.ResponsesRequest.Input[1].ResponsesReasoning.EncryptedContent == nil {
@@ -1058,7 +1094,7 @@ func TestClientErrorRetryIsGatedOnTokenFamilyWord(t *testing.T) {
 				return "", tc.refusal()
 			}
 			_, err := executeRequestWithRetries(ctx, config, handler, nil,
-				schemas.ResponsesRequest, schemas.BedrockMantle, "openai.gpt-6-luna", req, NewDefaultLogger(schemas.LogLevelError))
+				schemas.ResponsesRequest, schemas.BedrockMantle, "openai.gpt-6-luna", req, NewDefaultLogger(schemas.LogLevelError), nil)
 			if err == nil || err.Error == nil || err.Error.Message != tc.refusal().Error.Message {
 				t.Fatalf("expected the upstream's own error back, got %v", err)
 			}
@@ -1093,7 +1129,7 @@ func TestCannotBeModifiedNeverRetries(t *testing.T) {
 		}
 	}
 	if _, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.Anthropic, "claude-opus-5", req, NewDefaultLogger(schemas.LogLevelError)); err == nil {
+		schemas.ResponsesRequest, schemas.Anthropic, "claude-opus-5", req, NewDefaultLogger(schemas.LogLevelError), nil); err == nil {
 		t.Fatal("expected the refusal to be returned")
 	}
 	if attempts != 1 {
@@ -1126,7 +1162,7 @@ func TestNon400NeverStrips(t *testing.T) {
 				}
 			}
 			if _, err := executeRequestWithRetries(ctx, config, handler, nil,
-				schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, NewDefaultLogger(schemas.LogLevelError)); err == nil {
+				schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, NewDefaultLogger(schemas.LogLevelError), nil); err == nil {
 				t.Fatal("expected the error to be returned")
 			}
 			if attempts < 1 {
@@ -1928,7 +1964,7 @@ func TestStripUnverifiableReasoning_ChatShape(t *testing.T) {
 	t.Run("drops the reasoning detail whole on every assistant turn", func(t *testing.T) {
 		req := newThinkingSignatureChatRequest("ErUBCkYIBRgCKkD...")
 
-		if !stripUnverifiableReasoning(nil, req) {
+		if !stripUnverifiableReasoning(nil, req, nil) {
 			t.Fatal("expected the strip to report a change on a chat-shaped request")
 		}
 		for _, i := range []int{1, 3} {
@@ -1945,7 +1981,7 @@ func TestStripUnverifiableReasoning_ChatShape(t *testing.T) {
 		d[0].Signature = nil
 		d[0].Data = schemas.Ptr("ciphertext")
 
-		if !stripUnverifiableReasoning(nil, req) {
+		if !stripUnverifiableReasoning(nil, req, nil) {
 			t.Fatal("expected the strip to report a change")
 		}
 		if got := len(details(req, 1)); got != 0 {
@@ -1959,7 +1995,7 @@ func TestStripUnverifiableReasoning_ChatShape(t *testing.T) {
 		details(req, 1)[0].Signature = nil
 		details(req, 3)[0].Signature = nil
 
-		if stripUnverifiableReasoning(nil, req) {
+		if stripUnverifiableReasoning(nil, req, nil) {
 			t.Error("expected no change when no signature or encrypted data is present")
 		}
 	})
@@ -1970,7 +2006,7 @@ func TestStripUnverifiableReasoning_ChatShape(t *testing.T) {
 		req := newThinkingSignatureChatRequest("keep-me")
 		original := details(req, 1)
 
-		if !stripUnverifiableReasoning(nil, req) {
+		if !stripUnverifiableReasoning(nil, req, nil) {
 			t.Fatal("expected the strip to report a change")
 		}
 		if len(original) != 1 || original[0].Signature == nil || *original[0].Signature != "keep-me" {
@@ -1985,7 +2021,7 @@ func TestStripUnverifiableReasoning_ChatShape(t *testing.T) {
 		req.ChatRequest.Provider = schemas.OpenAI
 		req.ChatRequest.Model = "gpt-5.6-sol"
 
-		if !stripUnverifiableReasoning(nil, req) {
+		if !stripUnverifiableReasoning(nil, req, nil) {
 			t.Fatal("expected the strip to report a change")
 		}
 		d := details(req, 1)
@@ -2017,7 +2053,7 @@ func TestStripUnverifiableReasoning_ResponsesContentBlockSignature(t *testing.T)
 		},
 	}
 
-	if !stripUnverifiableReasoning(nil, req) {
+	if !stripUnverifiableReasoning(nil, req, nil) {
 		t.Fatal("expected the strip to report a change for a content-block signature")
 	}
 	blocks := req.ResponsesRequest.Input[1].Content.ContentBlocks
@@ -2049,7 +2085,7 @@ func TestStripUnverifiableReasoning_ResponsesContentBlockEncryptedContent(t *tes
 		},
 	}
 
-	if !stripUnverifiableReasoning(nil, req) {
+	if !stripUnverifiableReasoning(nil, req, nil) {
 		t.Fatal("expected the strip to report a change for a content-block encrypted_content")
 	}
 	blocks := req.ResponsesRequest.Input[1].Content.ContentBlocks
@@ -2081,7 +2117,7 @@ func TestStripUnverifiableReasoning_ResponsesContentBlockBothFields(t *testing.T
 		},
 	}
 
-	if !stripUnverifiableReasoning(nil, req) {
+	if !stripUnverifiableReasoning(nil, req, nil) {
 		t.Fatal("expected the strip to report a change")
 	}
 	blocks := req.ResponsesRequest.Input[1].Content.ContentBlocks
@@ -2114,7 +2150,7 @@ func TestStripUnverifiableReasoning_RawContentBlockCarriers(t *testing.T) {
 			`]}` +
 			`],"store":false}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected a content-block signature alone to be rewritten on the raw path")
 		}
 
@@ -2145,7 +2181,7 @@ func TestStripUnverifiableReasoning_RawContentBlockCarriers(t *testing.T) {
 			`]}` +
 			`],"store":false}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected a content-block encrypted_content alone to be rewritten on the raw path")
 		}
 
@@ -2171,7 +2207,7 @@ func TestStripUnverifiableReasoning_RawContentBlockCarriers(t *testing.T) {
 			`],"store":false}`)
 		before := string(req.ResponsesRequest.RawRequestBody)
 
-		if stripResponsesEncryptedContent(ctx, req) {
+		if stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Error("expected no change to be claimed when nothing unverifiable is present")
 		}
 		if body := string(req.ResponsesRequest.RawRequestBody); body != before {
@@ -2206,7 +2242,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`{"role":"user","content":"thanks"}` +
 			`],"max_tokens":1024}`)
 
-		if !stripUnverifiableReasoning(anthropicCtx(), req) {
+		if !stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Fatal("expected the raw Anthropic body to be rewritten")
 		}
 
@@ -2242,7 +2278,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`{"role":"user","content":"thanks"}` +
 			`],"max_tokens":1024}`)
 
-		if !stripUnverifiableReasoning(anthropicCtx(), req) {
+		if !stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Fatal("expected the redacted_thinking block to be removed")
 		}
 
@@ -2267,7 +2303,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`],"max_tokens":1024}`
 		req.ChatRequest.RawRequestBody = []byte(raw)
 
-		if stripUnverifiableReasoning(anthropicCtx(), req) {
+		if stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Error("expected no change to be claimed when the turn cannot be rewritten")
 		}
 		if string(req.ChatRequest.RawRequestBody) != raw {
@@ -2283,7 +2319,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`],"max_tokens":1024}`
 		req.ChatRequest.RawRequestBody = []byte(raw)
 
-		if stripUnverifiableReasoning(anthropicCtx(), req) {
+		if stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Error("expected no change for a body carrying no thinking blocks")
 		}
 		if string(req.ChatRequest.RawRequestBody) != raw {
@@ -2303,7 +2339,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 		raw := `{"contents":[{"role":"model","parts":[{"text":"planning","thoughtSignature":"abc"}]}]}`
 		req.ChatRequest.RawRequestBody = []byte(raw)
 
-		if stripUnverifiableReasoning(ctx, req) {
+		if stripUnverifiableReasoning(ctx, req, nil) {
 			t.Error("expected no change to be claimed for an unsupported raw dialect")
 		}
 		if string(req.ChatRequest.RawRequestBody) != raw {
@@ -2320,7 +2356,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`{"type":"thinking","thinking":"x","signature":"sig"}]}]}`
 		req.ChatRequest.RawRequestBody = []byte(raw)
 
-		if stripUnverifiableReasoning(ctx, req) {
+		if stripUnverifiableReasoning(ctx, req, nil) {
 			t.Error("expected no change when the body streams past core unparsed")
 		}
 	})
@@ -2342,7 +2378,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`]}` +
 			`],"max_tokens":1024}`)
 
-		if !stripUnverifiableReasoning(anthropicCtx(), req) {
+		if !stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Fatal("expected the latest assistant turn to be rewritten too")
 		}
 		body := string(req.ChatRequest.RawRequestBody)
@@ -2367,7 +2403,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"20C, sunny"}]}` +
 			`],"max_tokens":1024}`)
 
-		if !stripUnverifiableReasoning(anthropicCtx(), req) {
+		if !stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Fatal("expected the redacted block to be removed")
 		}
 		body := string(req.ChatRequest.RawRequestBody)
@@ -2397,7 +2433,7 @@ func TestStripChatUnverifiableReasoning_AnthropicRawBody(t *testing.T) {
 			`{"role":"user","content":"thanks"}` +
 			`],"max_tokens":1024}`)
 
-		if !stripUnverifiableReasoning(anthropicCtx(), req) {
+		if !stripUnverifiableReasoning(anthropicCtx(), req, nil) {
 			t.Fatal("expected the assistant turns to be rewritten")
 		}
 
@@ -2451,7 +2487,7 @@ func TestExecuteRequestWithRetries_HealsThinkingSignatureOnRawAnthropicChat(t *t
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-5", req, logger)
+		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-5", req, logger, nil)
 
 	if err != nil {
 		t.Fatalf("expected the stripped retry to succeed, got %v", err)
@@ -2493,7 +2529,7 @@ func TestExecuteRequestWithRetries_HealsThinkingSignatureOnChatShape(t *testing.
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-5", req, logger)
+		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-5", req, logger, nil)
 
 	if err != nil {
 		t.Fatalf("expected the stripped retry to succeed, got %v", err)
@@ -2606,7 +2642,7 @@ func newAnthropicThinkingResponsesRequest() *schemas.BifrostRequest {
 func TestStripResponsesEncryptedContent_AnthropicDropsWholeReasoningBlocks(t *testing.T) {
 	req := newAnthropicThinkingResponsesRequest()
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected the replayed reasoning to be strippable")
 	}
 
@@ -2645,7 +2681,7 @@ func TestStripResponsesEncryptedContent_AnthropicDropsRedactedThinking(t *testin
 		},
 	}
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected the redacted item to be strippable")
 	}
 	for i, item := range req.ResponsesRequest.Input {
@@ -2671,7 +2707,7 @@ func TestStripResponsesEncryptedContent_AnthropicDropsSummaryWithSignature(t *te
 		},
 	}
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected the reasoning item to be strippable")
 	}
 	for i, item := range req.ResponsesRequest.Input {
@@ -2687,7 +2723,7 @@ func TestStripResponsesEncryptedContent_AnthropicDropsSummaryWithSignature(t *te
 func TestStripResponsesEncryptedContent_OpenAIStillKeepsTheSummary(t *testing.T) {
 	req := newEncryptedReasoningRequest("ciphertext")
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected an OpenAI request's reasoning item to be stripped")
 	}
 	if got := len(req.ResponsesRequest.Input); got != 2 {
@@ -2720,7 +2756,7 @@ func TestStripResponsesEncryptedContent_DropsMessageItemEmptiedByRemoval(t *test
 		},
 	}
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected the reasoning block to be strippable")
 	}
 	for i, item := range req.ResponsesRequest.Input {
@@ -2749,7 +2785,7 @@ func TestStripResponsesEncryptedContent_KeepsMessageItemWithSurvivingContent(t *
 		},
 	}
 
-	if !stripResponsesEncryptedContent(nil, req) {
+	if !stripResponsesEncryptedContent(nil, req, nil) {
 		t.Fatal("expected the reasoning block to be strippable")
 	}
 	var kept *schemas.ResponsesMessage
@@ -2796,7 +2832,7 @@ func TestStripRawAnthropicChatThinking_AllocationScaling(t *testing.T) {
 		return b.Bytes()
 	}, func(body []byte) {
 		scratch := append([]byte(nil), body...)
-		stripRawAnthropicChatThinking(&scratch)
+		stripRawAnthropicChatThinking(&scratch, nil)
 	})
 }
 
@@ -2822,7 +2858,7 @@ func TestStripRawResponsesEncryptedContent_AllocationScaling(t *testing.T) {
 		return b.Bytes()
 	}, func(body []byte) {
 		scratch := append([]byte(nil), body...)
-		stripRawResponsesEncryptedContent(&scratch, false)
+		stripRawResponsesEncryptedContent(&scratch, false, nil)
 	})
 }
 
@@ -2887,7 +2923,7 @@ func TestStripResponsesEncryptedContent_GeminiCallIDSignature(t *testing.T) {
 		req := newGeminiSignedCallRequest()
 		original := req.ResponsesRequest.Input
 
-		if !stripResponsesEncryptedContent(nil, req) {
+		if !stripResponsesEncryptedContent(nil, req, nil) {
 			t.Fatal("expected the strip to report a change: the call id carries the signature")
 		}
 		got := req.ResponsesRequest.Input
@@ -2919,7 +2955,7 @@ func TestStripResponsesEncryptedContent_GeminiCallIDSignature(t *testing.T) {
 			}
 		}
 		req.ResponsesRequest.Input[1].ID = schemas.Ptr("fc_call_154438")
-		if stripResponsesEncryptedContent(nil, req) {
+		if stripResponsesEncryptedContent(nil, req, nil) {
 			t.Error("expected no change: a bare call id is not a token")
 		}
 	})
@@ -2935,7 +2971,7 @@ func TestStripResponsesEncryptedContent_GeminiCallIDSignature(t *testing.T) {
 			`{"type":"message","role":"user","content":"Now say OK."}` +
 			`]}`)
 
-		if !stripResponsesEncryptedContent(ctx, req) {
+		if !stripResponsesEncryptedContent(ctx, req, nil) {
 			t.Fatal("expected the raw strip to report a change")
 		}
 		body := string(req.ResponsesRequest.RawRequestBody)
@@ -2975,7 +3011,7 @@ func TestExecuteRequestWithRetries_HealsGeminiCorruptedThoughtSignature(t *testi
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, nil,
-		schemas.ResponsesRequest, schemas.Gemini, "gemini-3.7-flash", req, logger)
+		schemas.ResponsesRequest, schemas.Gemini, "gemini-3.7-flash", req, logger, nil)
 	if err != nil {
 		t.Fatalf("expected the stripped retry to succeed, got %v", err)
 	}
@@ -3018,7 +3054,7 @@ func TestStripUnverifiableReasoning_ChatShape_GeminiToolCallIDSignature(t *testi
 	originalCalls := req.ChatRequest.Input[1].ChatAssistantMessage.ToolCalls
 	originalTool := req.ChatRequest.Input[2].ChatToolMessage
 
-	if !stripUnverifiableReasoning(nil, req) {
+	if !stripUnverifiableReasoning(nil, req, nil) {
 		t.Fatal("expected the strip to report a change: the tool call id carries the signature")
 	}
 	if id := *req.ChatRequest.Input[1].ChatAssistantMessage.ToolCalls[0].ID; id != "call_154438" {
@@ -3032,7 +3068,178 @@ func TestStripUnverifiableReasoning_ChatShape_GeminiToolCallIDSignature(t *testi
 	}
 
 	// A second call finds nothing left and must not buy another upstream attempt.
-	if stripUnverifiableReasoning(nil, req) {
+	if stripUnverifiableReasoning(nil, req, nil) {
 		t.Error("expected no change once the ids are bare")
+	}
+}
+
+func TestEncryptedReasoningCacheDoesNotLearnUnconfirmedRejections(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		firstError    *schemas.BifrostError
+		retrySucceeds bool
+	}{
+		{"failed recovery", encryptedContentError(), false},
+		{"repairable mismatch", &schemas.BifrostError{StatusCode: schemas.Ptr(400), Error: &schemas.ErrorField{Message: "Encrypted content item_id did not match the target item id"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &reasoningRejectionCache{}
+			ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+			ctx.SetValue(schemas.BifrostContextKeyTracer, &schemas.NoOpTracer{})
+			req := newEncryptedReasoningRequest("foreign")
+			attempts := 0
+			_, err := executeRequestWithRetries(ctx, createTestConfig(0, 0, 0), func(schemas.Key) (string, *schemas.BifrostError) {
+				attempts++
+				if attempts == 1 || !tc.retrySucceeds {
+					return "", tc.firstError
+				}
+				return "ok", nil
+			}, nil, schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, NewDefaultLogger(schemas.LogLevelError), cache)
+			if attempts != 2 || (err == nil) != tc.retrySucceeds || cache.active.Load() {
+				t.Fatalf("unconfirmed rejection cached: attempts=%d error=%v active=%v", attempts, err, cache.active.Load())
+			}
+		})
+	}
+}
+
+func TestEncryptedReasoningCacheScope(t *testing.T) {
+	config := createTestConfig(0, 0, 0)
+	config.NetworkConfig.BaseURL = "https://upstream-B.example"
+	key := schemas.Key{ID: "B", Value: *schemas.NewSecretVar("credential-B")}
+	ctx := attributed(sessionCtx("thread"), "tenant-1", "user-1")
+	fingerprint := func(c *schemas.ProviderConfig, k schemas.Key, p schemas.ModelProvider, m string, ctx *schemas.BifrostContext) [32]byte {
+		t.Helper()
+		scope, ok := reasoningRejectionScope(ctx, c, p, m, k)
+		if !ok {
+			t.Fatal("unable to fingerprint upstream")
+		}
+		return scope
+	}
+	base := fingerprint(config, key, schemas.OpenAI, "model-1", ctx)
+	cache := &reasoningRejectionCache{}
+	cache.remember(base, map[[32]byte]struct{}{sha256.Sum256([]byte("foreign")): {}})
+	rotated, endpoint := key, *config
+	rotated.Value = *schemas.NewSecretVar("rotated-B")
+	endpoint.NetworkConfig.BaseURL = "https://upstream-A.example"
+	headerCtx := attributed(sessionCtx("thread"), "tenant-1", "user-1")
+	headerCtx.SetValue(schemas.BifrostContextKeyExtraHeaders, map[string][]string{"Authorization": {"different-credential"}})
+	for name, scope := range map[string][32]byte{
+		"provider":   fingerprint(config, key, schemas.Azure, "model-1", ctx),
+		"model":      fingerprint(config, key, schemas.OpenAI, "model-2", ctx),
+		"credential": fingerprint(config, rotated, schemas.OpenAI, "model-1", ctx),
+		"endpoint":   fingerprint(&endpoint, key, schemas.OpenAI, "model-1", ctx),
+		"caller":     fingerprint(config, key, schemas.OpenAI, "model-1", attributed(sessionCtx("thread"), "tenant-2", "user-1")),
+		"header":     fingerprint(config, key, schemas.OpenAI, "model-1", headerCtx),
+	} {
+		if scope == base || cache.contains(scope, "foreign") {
+			t.Fatalf("rejection leaked across %s identity", name)
+		}
+	}
+	metadata := key
+	metadata.Name, metadata.Status, metadata.UseForBatchAPI = "renamed", schemas.KeyStatusSuccess, schemas.Ptr(true)
+	metadata.UseAnthropicEndpoints, metadata.UseOpenAIEndpoints = schemas.Ptr(false), schemas.Ptr(false)
+	if scope := fingerprint(config, metadata, schemas.OpenAI, "model-1", ctx); scope != base || !cache.contains(scope, "foreign") {
+		t.Fatal("administrative metadata invalidated the recovery decision")
+	}
+}
+
+func TestEncryptedReasoningCacheBoundedExpiryAndConcurrency(t *testing.T) {
+	cache := &reasoningRejectionCache{limit: 2}
+	scope := sha256.Sum256([]byte("B"))
+	remember := func(token string) { cache.remember(scope, map[[32]byte]struct{}{sha256.Sum256([]byte(token)): {}}) }
+	remember("one")
+	remember("two")
+	if !cache.contains(scope, "one") {
+		t.Fatal("missing remembered token")
+	}
+	remember("three")
+	if cache.contains(scope, "two") || !cache.contains(scope, "one") {
+		t.Fatal("LRU did not preserve the recently used entry")
+	}
+	cache.mu.Lock()
+	e := cache.entries[reasoningRejectionKey(scope, sha256.Sum256([]byte("one")))]
+	value := e.Value.(reasoningRejectionEntry)
+	value.expires = time.Now().Add(-time.Second)
+	e.Value = value
+	cache.mu.Unlock()
+	if cache.contains(scope, "one") {
+		t.Fatal("expired decision still applied")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); remember(strconv.Itoa(i)); cache.contains(scope, strconv.Itoa(i)) }(i)
+	}
+	wg.Wait()
+	if len(cache.entries) > 2 {
+		t.Fatal("cache exceeded its bound")
+	}
+}
+
+func TestEncryptedReasoningCacheRestoresHistoryOnKeyRotation(t *testing.T) {
+	cache := &reasoningRejectionCache{}
+	config := createTestConfig(1, 0, 0)
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	ctx.SetValue(schemas.BifrostContextKeyTracer, &schemas.NoOpTracer{})
+	keyB, keyA := schemas.Key{ID: "B"}, schemas.Key{ID: "A"}
+	scope, _ := reasoningRejectionScope(ctx, config, schemas.OpenAI, "gpt-5.6-sol", keyB)
+	cache.remember(scope, map[[32]byte]struct{}{sha256.Sum256([]byte("foreign")): {}})
+	req := newEncryptedReasoningRequest("foreign")
+	selected := 0
+	_, err := executeRequestWithRetries(ctx, config, func(key schemas.Key) (string, *schemas.BifrostError) {
+		payload := req.ResponsesRequest.Input[1].ResponsesReasoning.EncryptedContent
+		if key.ID == "B" {
+			if payload != nil {
+				t.Fatal("known rejection sent to B")
+			}
+			return "", &schemas.BifrostError{StatusCode: schemas.Ptr(401), Error: &schemas.ErrorField{Message: "bad key"}}
+		}
+		if payload == nil || *payload != "foreign" {
+			t.Fatal("B's cached rewrite leaked to A")
+		}
+		return "ok", nil
+	}, func(map[string]bool, map[string]bool) (schemas.Key, error) {
+		selected++
+		if selected == 1 {
+			return keyB, nil
+		}
+		return keyA, nil
+	}, schemas.ResponsesRequest, schemas.OpenAI, "gpt-5.6-sol", req, NewDefaultLogger(schemas.LogLevelError), cache)
+	if err != nil || selected != 2 {
+		t.Fatalf("rotation failed: %v", err)
+	}
+}
+
+func TestEncryptedReasoningCacheStreamCompletion(t *testing.T) {
+	completed := &schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: &schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeCompleted}}
+	chat := &schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{Choices: []schemas.BifrostResponseChoice{{FinishReason: schemas.Ptr("stop")}}}}
+	for _, tc := range []struct {
+		name   string
+		chunks []*schemas.BifrostStreamChunk
+		learn  bool
+	}{
+		{"Responses completion", []*schemas.BifrostStreamChunk{completed}, true},
+		{"chat completion", []*schemas.BifrostStreamChunk{chat}, true},
+		{"late error", []*schemas.BifrostStreamChunk{completed, {BifrostError: encryptedContentError()}}, false},
+		{"truncated", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &reasoningRejectionCache{}
+			scope := sha256.Sum256([]byte("B"))
+			tokens := map[[32]byte]struct{}{sha256.Sum256([]byte("foreign")): {}}
+			input := make(chan *schemas.BifrostStreamChunk, len(tc.chunks))
+			for _, chunk := range tc.chunks {
+				input <- chunk
+			}
+			close(input)
+			ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+			forwarded := 0
+			for range rememberReasoningStream(ctx, input, cache, scope, tokens) {
+				forwarded++
+			}
+			if got := cache.contains(scope, "foreign"); got != tc.learn || forwarded != len(tc.chunks) {
+				t.Fatalf("cached=%v want=%v forwarded=%d want=%d", got, tc.learn, forwarded, len(tc.chunks))
+			}
+		})
 	}
 }

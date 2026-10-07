@@ -79,7 +79,7 @@ func TestExecuteRequestWithRetries_SuccessScenarios(t *testing.T) {
 			schemas.OpenAI,
 			"gpt-4",
 			nil,
-			logger,
+			logger, nil,
 		)
 
 		if callCount != 1 {
@@ -115,7 +115,7 @@ func TestExecuteRequestWithRetries_SuccessScenarios(t *testing.T) {
 			schemas.OpenAI,
 			"gpt-4",
 			nil,
-			logger,
+			logger, nil,
 		)
 
 		if callCount != 3 {
@@ -153,7 +153,7 @@ func TestExecuteRequestWithRetries_RetryLimits(t *testing.T) {
 			schemas.OpenAI,
 			"gpt-4",
 			nil,
-			logger,
+			logger, nil,
 		)
 
 		// Should try: initial + 2 retries = 3 total attempts
@@ -219,7 +219,7 @@ func TestExecuteRequestWithRetries_NonRetryableErrors(t *testing.T) {
 				schemas.OpenAI,
 				"gpt-4",
 				nil,
-				logger,
+				logger, nil,
 			)
 
 			if callCount != 1 {
@@ -296,7 +296,7 @@ func TestExecuteRequestWithRetries_RetryableConditions(t *testing.T) {
 				schemas.OpenAI,
 				"gpt-4",
 				nil,
-				logger,
+				logger, nil,
 			)
 
 			// Should try: initial + 1 retry = 2 total attempts
@@ -544,7 +544,7 @@ func TestExecuteRequestWithRetries_LoggingAndCounting(t *testing.T) {
 		schemas.OpenAI,
 		"gpt-4",
 		nil,
-		logger,
+		logger, nil,
 	)
 
 	// Verify call progression
@@ -774,7 +774,7 @@ func TestExecuteRequestWithRetries_529RetriesSameKeyWithoutRotation(t *testing.T
 	}
 
 	result, err := executeRequestWithRetries(ctx, config, handler, keyProvider,
-		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-4-5", nil, logger)
+		schemas.ChatCompletionRequest, schemas.Anthropic, "claude-sonnet-4-5", nil, logger, nil)
 
 	if err != nil {
 		t.Fatalf("expected 529 to be retried to success, got error: %v", err)
@@ -1410,7 +1410,7 @@ func TestSelectKeyFromProviderForModel_SessionStickinessNoRotation(t *testing.T)
 	}
 
 	result, retryErr := executeRequestWithRetries(bfCtx, config, handler, keyProvider,
-		schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger)
+		schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger, nil)
 
 	if retryErr != nil {
 		t.Fatalf("expected success, got error: %v", retryErr)
@@ -1596,7 +1596,7 @@ func TestExecuteRequestWithRetries_KeyRotation(t *testing.T) {
 		}
 
 		result, err := executeRequestWithRetries(ctx, config, handler, keyProvider,
-			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger)
+			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger, nil)
 
 		if err != nil {
 			t.Fatalf("expected success, got error: %v", err)
@@ -1644,7 +1644,7 @@ func TestExecuteRequestWithRetries_KeyRotation(t *testing.T) {
 		}
 
 		result, err := executeRequestWithRetries(ctx, config, handler, keyProvider,
-			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger)
+			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger, nil)
 
 		if err != nil {
 			t.Fatalf("expected success, got error: %v", err)
@@ -1692,7 +1692,7 @@ func TestExecuteRequestWithRetries_KeyRotation(t *testing.T) {
 		}
 
 		executeRequestWithRetries(ctx, config6, handler, keyProvider,
-			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger)
+			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger, nil)
 
 		if len(selectedKeyIDs) != 6 {
 			t.Fatalf("expected 6 attempts (1 initial + 5 retries), got %d", len(selectedKeyIDs))
@@ -1717,7 +1717,7 @@ func TestExecuteRequestWithRetries_KeyRotation(t *testing.T) {
 		}
 
 		result, err := executeRequestWithRetries(cleanCtx, config, handler, nil,
-			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger)
+			schemas.ChatCompletionRequest, schemas.OpenAI, "gpt-4", nil, logger, nil)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -3700,7 +3700,7 @@ func TestExecuteRequestWithRetries_EmptyStreamReturnsClosedChannel(t *testing.T)
 		schemas.OpenAI,
 		"gpt-4",
 		nil,
-		logger,
+		logger, nil,
 	)
 
 	if err != nil {

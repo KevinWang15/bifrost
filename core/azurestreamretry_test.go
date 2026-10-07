@@ -214,7 +214,7 @@ func TestAzureResponsesRetriesAfterStartupEvents(t *testing.T) {
 
 	stream, err := executeRequestWithRetries(
 		ctx, config, handler, nil, schemas.ResponsesStreamRequest,
-		schemas.Azure, "test-model", nil, logger,
+		schemas.Azure, "test-model", nil, logger, nil,
 	)
 	if err != nil {
 		t.Fatalf("expected successful retry, got %v", err)
@@ -398,7 +398,7 @@ func TestOpenAIModelsRetryAfterStartupEvents(t *testing.T) {
 
 					stream, err := executeRequestWithRetries(
 						ctx, config, handler, nil, req.requestType,
-						host.provider, host.model, nil, logger,
+						host.provider, host.model, nil, logger, nil,
 					)
 
 					switch {
@@ -490,7 +490,7 @@ func TestAzureChatRetriesAfterStartupEvents(t *testing.T) {
 
 	stream, err := executeRequestWithRetries(
 		ctx, config, handler, nil, schemas.ChatCompletionStreamRequest,
-		schemas.Azure, "test-model", nil, logger,
+		schemas.Azure, "test-model", nil, logger, nil,
 	)
 	if err != nil {
 		t.Fatalf("expected successful retry, got %v", err)
